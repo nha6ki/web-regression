@@ -1,0 +1,52 @@
+services:
+  gitea:
+    image: docker.gitea.com/gitea:1.27.3
+    environment:
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__server__ROOT_URL: http://gitea:3000/
+      GITEA__server__OFFLINE_MODE: "true"
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vikunja
+      POSTGRES_USER: vikunja
+      POSTGRES_PASSWORD: ${QA_PASSWORD:?start using run.sh}
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "vikunja", "-d", "vikunja"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+  vikunja:
+    image: vikunja/vikunja:0.24.6
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      VIKUNJA_SERVICE_PUBLICURL: http://vikunja:3456/
+      VIKUNJA_DATABASE_TYPE: postgres
+      VIKUNJA_DATABASE_HOST: db
+      VIKUNJA_DATABASE_DATABASE: vikunja
+      VIKUNJA_DATABASE_USER: vikunja
+      VIKUNJA_DATABASE_PASSWORD: ${QA_PASSWORD:?start using run.sh}
+      VIKUNJA_SERVICE_ENABLEREGISTRATION: "true"
+      VIKUNJA_MAILER_ENABLED: "false"
+  tests:
+    image: mcr.microsoft.com/playwright:v1.56.1-noble
+    working_dir: /tmp
+    init: true
+    environment:
+      QA_PASSWORD: ${QA_PASSWORD:-}
+    volumes:
+      - ./:/source:ro
+      - ${REPORT_DIR:-./reports}:/output
+    command:
+      - bash
+      - -ec
+      - |
+        mkdir -p /tmp/suite
+        cp -r /source/package.json /source/tests /source/playwright.config.ts /tmp/suite/
+        cd /tmp/suite
+        npm install --no-audit --no-fund
+        npx playwright test
