@@ -44,5 +44,5 @@ test('日本語タスクを画面で作成し、APIで同じタスクの件名�
 
   const saved = await request.get('/api/v1/tasks/' + id, { headers });
   await expect(saved).toBeOK();
-  expect(await saved.json()).toMatchObject({ id, title: '請求書を照合', project_id: projectId, done: false });
+  expect(await saved.json()).toMatchObject({ id, title, project_id: projectId, done: false });
 });
