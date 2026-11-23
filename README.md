@@ -1,6 +1,6 @@
 # Web application regression tests
 
-The Docker suite runs 28 Playwright cases across nine applications. The [Shopify cart suite](#shopify-cart-tests) adds three cases against a development storefront and runs separately in Microsoft Edge.
+The Docker suite runs 34 Playwright cases across nine applications. The [Shopify cart suite](#shopify-cart-tests) adds six cases against a development storefront and runs separately in Microsoft Edge.
 
 ## Run the Docker suite
 
@@ -10,13 +10,13 @@ Requirements: Linux or Windows with WSL2, Bash, and a running Docker Engine with
 bash run.sh
 ```
 
-The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **28 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
+The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **34 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
 
-The runner also uses host curl and unzip to install WooCommerce 11.3.0 from downloads.wordpress.org. Three store tests check cart quantities, saved order lines and product-specific discounts. The fixtures use Japanese yen, virtual products, and an offline payment method.
+The runner also uses host curl and unzip to install WooCommerce 11.3.0 from downloads.wordpress.org. Six store tests cover cart quantities, saved orders, and product-specific discounts, including coupon removal at a 390px viewport, rejection of an unknown code, and discount reconciliation after checkout. The fixtures use Japanese yen, virtual products, and an offline payment method.
 
 Moodle uses a separate PostgreSQL database and PHP container. The runner fetches Moodle 4.5.16 from packaging.moodle.org and verifies the archive checksum before installing it. The course has a teacher, two enrolled students and a separate assignment for each case.
 
-## What the twenty-eight tests check
+## What the Docker tests check
 
 | Scenario | Action | Evidence checked |
 | --- | --- | --- |
@@ -45,6 +45,10 @@ Moodle uses a separate PostgreSQL database and PHP container. The runner fetches
 | WordPress draft visibility | Save a Japanese draft as an editor. | Its ID and raw text match the editor API response. An anonymous reader cannot retrieve the draft or read it at its URL. |
 | WordPress publication | Publish a draft through Quick Edit in the posts list. | The public API and a fresh reader session see the same post and text. |
 | WordPress correction | Correct the body of a published announcement through the editor API. | The original URL shows the correction after reload and the post keeps its ID. |
+
+| WordPress mobile navigation | Follow a link within a published article at a 390px viewport. | The target URL, heading and deadline match the intended article. |
+| WordPress withdrawal | Move a searchable published post back to draft. | The anonymous search result disappears and the original URL returns 404. |
+| WordPress category change | Move a post between categories. | Its link disappears from the old archive and appears in the new one. |
 
 ## Test environment
 
@@ -89,13 +93,16 @@ $env:SHOPIFY_QA_STORE = 'your-dev-store.myshopify.com'
 & '.\node_modules\.bin\playwright.cmd' test -c external/shopify/playwright.config.ts
 ```
 
-If prompted, enter the storefront password in the Edge window within three minutes. Each test starts with an empty cart. The tests use the storefront cart API to:
+If prompted, enter the storefront password in the Edge window within three minutes. Each test starts with an empty cart. The tests check the following storefront behaviors:
 
 1. Add the blue variant and confirm its ID and quantity in the saved cart, then check that the cart page displays the product link and color.
 2. Change the red quantity from one to two and compare both the line amount and cart total with twice the unit price.
 3. Remove blue from a two-color cart and confirm that the two red units remain.
+4. Open the blue variant at a 390px viewport, submit its product form and verify the saved and rendered cart.
+5. Add red twice and verify a single line with quantity two and the correct total.
+6. Open the cart in a second tab of the same session and check the blue item after reloading.
 
-The Windows/Edge run reported **3 passed (15.4s)**. These cases stop at the cart and run independently of the [28-case CI run](https://github.com/nha6ki/web-regression/actions/runs/45129469117). To open the local Shopify report:
+The earlier three-case Windows/Edge run reported **3 passed (15.4s)**. These cases stop at the cart and run independently of the [28-case CI run](https://github.com/nha6ki/web-regression/actions/runs/45129469117). To open the local Shopify report:
 
 ```powershell
 & '.\node_modules\.bin\playwright.cmd' show-report reports/shopify/html

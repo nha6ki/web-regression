@@ -92,3 +92,63 @@ test('本文を訂正しても同じ投稿URLで最新版を読める', async ({
     await expect(tab.locator('body')).not.toContainText(original);
   } finally { await reader.close(); }
 });
+
+test('モバイル幅で案内記事の本文リンクから正しい申込ページへ移動できる', async ({ page, browser, baseURL }) => {
+  const headers = await editorSession(page);
+  const target = await save(page, headers, { title: '講習会の申込案内', content: '申込期限は金曜日です。', status: 'publish' });
+  const source = await save(page, headers, {
+    title: '講習会の日程', content: '<a href="' + target.link + '">申込方法を確認する</a>', status: 'publish',
+  });
+  const reader = await browser.newContext({ baseURL, viewport: { width: 390, height: 844 } });
+  try {
+    const tab = await reader.newPage();
+    await tab.goto(source.link);
+    await tab.getByRole('link', { name: '申込方法を確認する', exact: true }).click();
+    await expect(tab).toHaveURL(target.link);
+    await expect(tab.getByRole('heading', { name: '講習会の申込案内', exact: true }).first()).toBeVisible();
+    await expect(tab.getByText('申込期限は金曜日です。', { exact: true })).toBeVisible();
+  } finally { await reader.close(); }
+});
+
+test('公開を取り下げると読者の検索結果と元URLから記事が消える', async ({ page, browser, baseURL }) => {
+  const headers = await editorSession(page);
+  const title = '夜間開館予定の変更';
+  const post = await save(page, headers, { title, content: '臨時の夜間開館を予定しています。', status: 'publish' });
+  const reader = await browser.newContext({ baseURL });
+  try {
+    const tab = await reader.newPage();
+    await tab.goto('/?s=' + encodeURIComponent(title));
+    const result = tab.getByRole('link', { name: title, exact: true });
+    await expect(result.first()).toBeVisible();
+    await save(page, headers, { status: 'draft' }, post.id);
+    expect((await tab.reload())?.status()).toBe(200);
+    await expect(result).toHaveCount(0);
+    expect((await tab.goto(post.link))?.status()).toBe(404);
+    await expect(tab.locator('body')).not.toContainText('臨時の夜間開館を予定しています。');
+  } finally { await reader.close(); }
+});
+
+test('記事の分類を変更すると移動先のカテゴリーだけに掲載される', async ({ page, browser, baseURL }) => {
+  const headers = await editorSession(page);
+  const categories = [];
+  for (const name of ['研修日程', '開催報告']) {
+    const res = await page.request.post('/?rest_route=/wp/v2/categories', { headers, data: { name } });
+    await expect(res).toBeOK();
+    categories.push(await res.json());
+  }
+  const [oldCategory, newCategory] = categories;
+  const title = '冬季研修の記録';
+  const post = await save(page, headers, { title, content: '研修資料を公開しました。', status: 'publish', categories: [oldCategory.id] });
+  const reader = await browser.newContext({ baseURL });
+  try {
+    const tab = await reader.newPage();
+    const result = tab.getByRole('main').getByRole('link', { name: title, exact: true });
+    await tab.goto(oldCategory.link);
+    await expect(result.first()).toBeVisible();
+    await save(page, headers, { categories: [newCategory.id] }, post.id);
+    await tab.reload();
+    await expect(result).toHaveCount(0);
+    expect((await tab.goto(newCategory.link))?.status()).toBe(200);
+    await expect(result.first()).toHaveAttribute('href', post.link);
+  } finally { await reader.close(); }
+});
