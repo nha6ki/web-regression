@@ -32,6 +32,16 @@ services:
       VIKUNJA_DATABASE_PASSWORD: ${QA_PASSWORD:?start using run.sh}
       VIKUNJA_SERVICE_ENABLEREGISTRATION: "true"
       VIKUNJA_MAILER_ENABLED: "false"
+  grist:
+    image: gristlabs/grist:1.7.20
+    environment:
+      GRIST_IN_SERVICE: "true"
+      GRIST_ADMIN_EMAIL: qa@example.test
+      GRIST_SINGLE_ORG: docs
+      GRIST_DEFAULT_EMAIL: qa@example.test
+      GRIST_FORCE_LOGIN: "true"
+      APP_HOME_URL: http://grist:8484
+      GRIST_WIDGET_LIST_URL: ""
   tests:
     image: mcr.microsoft.com/playwright:v1.56.1-noble
     working_dir: /tmp

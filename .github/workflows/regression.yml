@@ -16,7 +16,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run Gitea and Vikunja tests
+      - name: Run regression tests
         run: bash run.sh
 
       - name: Save Playwright HTML report

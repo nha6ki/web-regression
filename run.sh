@@ -14,7 +14,7 @@ project="webreg-$$-$(date +%s)"
 dc=(docker compose -p "$project")
 cleanup() { "${dc[@]}" down -v --remove-orphans; }
 trap cleanup EXIT
-"${dc[@]}" up -d gitea vikunja
+"${dc[@]}" up -d gitea vikunja grist
 wait_for_service() {
   local service=$1 url=$2 attempts=$3 i
   for ((i = 0; i < attempts; i++)); do
@@ -36,5 +36,6 @@ for account in qaoperator qareader qaoutsider; do
     --must-change-password=false
 done
 wait_for_service vikunja http://vikunja:3456/api/v1/info 60
+wait_for_service grist http://grist:8484/status 90
 echo "HTML report: $REPORT_DIR/html/index.html"
 "${dc[@]}" run --rm tests

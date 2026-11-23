@@ -1,4 +1,4 @@
-# Web regression tests for Gitea and Vikunja
+# Web regression tests for Gitea, Vikunja and Grist
 
 This Playwright suite tests whether Japanese issue and task data survives a round trip through a web application. It creates records in Chromium, reads them back by ID through the application API, and checks their contents. Two additional Gitea scenarios cover search after a title edit and access to an issue in a private repository.
 
@@ -10,9 +10,9 @@ Requirements: Linux or Windows with WSL2, Bash, and a running Docker Engine with
 bash run.sh
 ```
 
-The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **7 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
+The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **10 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
 
-## What the seven tests check
+## What the ten tests check
 
 | Scenario | Action | Evidence checked |
 | --- | --- | --- |
@@ -23,12 +23,15 @@ The first run downloads the container images. Each run installs the dependencies
 | [Vikunja completion](tests/vikunja-workflows.spec.ts) | Complete a task and reload its detail view. | The UI offers to reopen it and its API record is complete. |
 | [Vikunja empty title](tests/vikunja-workflows.spec.ts) | Press Enter in an empty task field. | The project keeps exactly the original task IDs. |
 | [Vikunja same-title tasks](tests/vikunja-workflows.spec.ts) | Complete one of two identically named tasks in different projects. | Only the selected ID is complete. |
+| [Grist invoice recalculation](tests/grist.spec.ts) | Edit the quantity on an invoice line in Chromium. | After reloading, the line shows the updated amount. The API returns the original row ID, quantity 3 and total 7500. |
+| Grist item correction | Edit the Japanese item name in Chromium. | The row ID, quantity, price and amount are preserved. |
+| Grist line removal | Delete one seeded line by ID through the API and reload the grid. | Only the other record remains with its original values. |
 
 ## Test environment
 
-[Docker Compose](compose.yaml) starts Gitea 1.27.3 with SQLite and Vikunja 0.24.6 with PostgreSQL 16. The test container reaches both applications over the Compose network without publishing host ports. Each run gets a separate Compose project and a generated password. On exit, the runner removes that project's containers and volumes. Reports remain on the host.
+[Docker Compose](compose.yaml) starts Gitea 1.27.3 with SQLite and Vikunja 0.24.6 with PostgreSQL 16, alongside Grist 1.7.20 in single-user mode on the isolated Compose network. The test container reaches all three applications over the Compose network without publishing host ports. Each run gets a separate Compose project and a generated password. On exit, the runner removes that project's containers and volumes. Reports remain on the host.
 
-Both applications use the same [Playwright configuration](playwright.config.ts) and HTML reporter. The suite runs Chromium with one worker and zero test retries. The [GitHub Actions workflow](.github/workflows/regression.yml) calls the same `bash run.sh` entry point on Ubuntu for pushes, pull requests, and manual runs. After a completed test run, the workflow uploads the HTML report, including when a test fails. Artifact retention is set to 14 days.
+All three applications use the same [Playwright configuration](playwright.config.ts) and HTML reporter. The suite runs Chromium with one worker and zero test retries. The [GitHub Actions workflow](.github/workflows/regression.yml) calls the same `bash run.sh` entry point on Ubuntu for pushes, pull requests, and manual runs. After a completed test run, the workflow uploads the HTML report, including when a test fails. Artifact retention is set to 14 days.
 
 ## Troubleshooting and artifacts
 

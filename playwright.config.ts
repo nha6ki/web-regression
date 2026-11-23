@@ -3,6 +3,11 @@ export default defineConfig({
   testDir: './tests',
   projects: [
     {
+      name: 'grist',
+      testMatch: /grist.*\.spec\.ts$/,
+      use: { baseURL: 'http://grist:8484', locale: 'en-US' },
+    },
+    {
       name: 'gitea',
       testMatch: /gitea.*\.spec\.ts$/,
       use: { baseURL: 'http://gitea:3000' },
