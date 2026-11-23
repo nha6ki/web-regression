@@ -1,4 +1,4 @@
-# Web regression tests for Gitea, Vikunja, Grist, Paperless-ngx, Snipe-IT WordPress and WooCommerce
+# Web regression tests for Gitea, Vikunja, Grist, Paperless-ngx, Snipe-IT WordPress, WooCommerce and Nextcloud
 
 This Playwright suite tests whether Japanese issue and task data survives a round trip through a web application. It creates records in Chromium, reads them back by ID through the application API, and checks their contents. Two additional Gitea scenarios cover search after a title edit and access to an issue in a private repository.
 
@@ -10,14 +10,17 @@ Requirements: Linux or Windows with WSL2, Bash, and a running Docker Engine with
 bash run.sh
 ```
 
-The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **22 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
+The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **25 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
 
 The runner also uses host curl and unzip to install WooCommerce 11.3.0 from downloads.wordpress.org. Three store tests check cart quantities, saved order lines and product-specific discounts. The fixtures use Japanese yen, virtual products, and an offline payment method.
 
-## What the twenty-two tests check
+## What the twenty-five tests check
 
 | Scenario | Action | Evidence checked |
 | --- | --- | --- |
+| Nextcloud file move | Move a Japanese-named text file to a second folder. | The source returns 404, the destination returns the original bytes, and Files shows the name in the destination folder. |
+| Nextcloud trash restore | Delete a file and restore its matching trash entry. | The original path first returns 404 and then returns the original bytes. |
+| Nextcloud same-name files | Overwrite one of two files with the same name in separate folders. | Both paths return the expected, distinct contents. |
 | [Gitea issue creation](tests/gitea.spec.ts) | Submit a Japanese title and body through the issue form. | Use the issue number from the resulting page URL to fetch the record. The API must return the same title and body with state `open`. |
 | [Gitea issue lifecycle](tests/gitea-lifecycle.spec.ts) | Rename an issue through the API, load the issue list with the new title as the search query, and open the matching result. | The unrelated issue is absent from the results. The selected link opens the original issue number. After closing it through the API, a fresh read returns `closed`. |
 | [Gitea private issue visibility](tests/gitea-visibility.spec.ts) | Request the same issue as a read collaborator and as a signed-in nonmember, through both the UI and API. | The collaborator sees the title and body. The nonmember receives HTTP 403 or 404, and both strings are absent from the API response and rendered page. |

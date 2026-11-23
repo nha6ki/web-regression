@@ -16,7 +16,7 @@ project="webreg-$$-$(date +%s)"
 dc=(docker compose -p "$project")
 cleanup() { "${dc[@]}" down -v --remove-orphans; }
 trap cleanup EXIT
-"${dc[@]}" up -d gitea vikunja grist paperless snipe wordpress
+"${dc[@]}" up -d gitea vikunja grist paperless snipe wordpress nextcloud
 wait_for_service() {
   local service=$1 url=$2 attempts=$3 i
   for ((i = 0; i < attempts; i++)); do
@@ -85,5 +85,8 @@ unzip -q "$plugin_tmp/woocommerce.zip" -d "$plugin_tmp"
 "${dc[@]}" cp "$plugin_tmp/woocommerce" wordpress:/var/www/html/wp-content/plugins/
 "${dc[@]}" exec -T --user www-data wordpress php < tests/support/woocommerce-install.php
 "${dc[@]}" exec -T -e WC_SEED=yes --user www-data wordpress php < tests/support/woocommerce-install.php
+wait_for_service nextcloud http://nextcloud/status.php 150
+"${dc[@]}" exec -T --user www-data nextcloud php occ app:enable files_trashbin
+"${dc[@]}" exec -T --user www-data nextcloud php occ app:disable firstrunwizard
 echo "HTML report: $REPORT_DIR/html/index.html"
 "${dc[@]}" run --rm -e SNIPE_TOKEN tests

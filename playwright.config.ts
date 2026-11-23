@@ -3,6 +3,11 @@ export default defineConfig({
   testDir: './tests',
   projects: [
     {
+      name: 'nextcloud',
+      testMatch: /nextcloud\.spec\.ts$/,
+      use: { baseURL: 'http://nextcloud' },
+    },
+    {
       name: 'woocommerce',
       testMatch: /woocommerce\.spec\.ts$/,
       use: { baseURL: 'http://wordpress' },

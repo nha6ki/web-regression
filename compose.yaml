@@ -114,6 +114,13 @@ services:
         define('WP_SITEURL', 'http://wordpress');
         define('WP_HTTP_BLOCK_EXTERNAL', true);
         define('DISABLE_WP_CRON', true);
+  nextcloud:
+    image: nextcloud:33.0.11-apache
+    environment:
+      SQLITE_DATABASE: nextcloud
+      NEXTCLOUD_ADMIN_USER: qaoperator
+      NEXTCLOUD_ADMIN_PASSWORD: ${QA_PASSWORD:?start using run.sh}
+      NEXTCLOUD_TRUSTED_DOMAINS: nextcloud
   tests:
     image: mcr.microsoft.com/playwright:v1.56.1-noble
     working_dir: /tmp
