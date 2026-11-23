@@ -1,4 +1,4 @@
-# Web regression tests for Gitea, Vikunja, Grist and Paperless-ngx
+# Web regression tests for Gitea, Vikunja, Grist, Paperless-ngx and Snipe-IT
 
 This Playwright suite tests whether Japanese issue and task data survives a round trip through a web application. It creates records in Chromium, reads them back by ID through the application API, and checks their contents. Two additional Gitea scenarios cover search after a title edit and access to an issue in a private repository.
 
@@ -10,9 +10,9 @@ Requirements: Linux or Windows with WSL2, Bash, and a running Docker Engine with
 bash run.sh
 ```
 
-The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **13 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
+The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **16 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
 
-## What the thirteen tests check
+## What the sixteen tests check
 
 | Scenario | Action | Evidence checked |
 | --- | --- | --- |
@@ -29,12 +29,15 @@ The first run downloads the container images. Each run installs the dependencies
 | Paperless PDF ingestion | Upload a text PDF from the dashboard. | The completed task identifies a document with the expected title and the original PDF bytes. |
 | Paperless classification | Assign a correspondent and a tag to an imported document through the API. | A fresh API read returns both IDs for that document. |
 | Paperless tag filter | Open the document list filtered by one tag. | The UI includes the tagged document and excludes the control. The API returns exactly the tagged ID. |
+| Snipe-IT checkout | Lend an asset via API. | A fresh read returns the intended user ID and the UI displays the asset tag. |
+| Snipe-IT check-in | Return an assigned asset via API. | The same ID has no assignee after check-in. |
+| Snipe-IT model identity | Check out one of two assets of the same model. | The two IDs retain distinct assignment states. |
 
 ## Test environment
 
-[Docker Compose](compose.yaml) starts Gitea 1.27.3 with SQLite and Vikunja 0.24.6 with PostgreSQL 16, alongside Grist 1.7.20 in single-user mode on the isolated Compose network. Paperless-ngx 3.5.1 uses its local database and a Redis broker. Its dashboard uses automatic login inside the test network. The test container reaches all four applications over the Compose network without publishing host ports. Each run gets a separate Compose project and a generated password. On exit, the runner removes that project's containers and volumes. Reports remain on the host.
+[Docker Compose](compose.yaml) starts Gitea 1.27.3 with SQLite and Vikunja 0.24.6 with PostgreSQL 16, alongside Grist 1.7.20 in single-user mode on the isolated Compose network. Paperless-ngx 3.5.1 uses its local database and a Redis broker. Its dashboard uses automatic login inside the test network. The test container reaches all five applications over the Compose network without publishing host ports. Each run gets a separate Compose project and a generated password. On exit, the runner removes that project's containers and volumes. Reports remain on the host.
 
-All four applications use the same [Playwright configuration](playwright.config.ts) and HTML reporter. The suite runs Chromium with one worker and zero test retries. The [GitHub Actions workflow](.github/workflows/regression.yml) calls the same `bash run.sh` entry point on Ubuntu for pushes, pull requests, and manual runs. After a completed test run, the workflow uploads the HTML report, including when a test fails. Artifact retention is set to 14 days.
+All five applications use the same [Playwright configuration](playwright.config.ts) and HTML reporter. The suite runs Chromium with one worker and zero test retries. The [GitHub Actions workflow](.github/workflows/regression.yml) calls the same `bash run.sh` entry point on Ubuntu for pushes, pull requests, and manual runs. After a completed test run, the workflow uploads the HTML report, including when a test fails. Artifact retention is set to 14 days.
 
 ## Troubleshooting and artifacts
 
@@ -55,3 +58,5 @@ The failure drill changed only the expected Vikunja title on a dedicated branch.
 | [Baseline](https://github.com/nha6ki/web-regression/actions/runs/45025068822) | `c06a2ee` | All four tests passed. |
 | [Title mismatch](https://github.com/nha6ki/web-regression/actions/runs/45026775483) | `c1c92d3` | Only the Vikunja test failed. All three Gitea tests passed, and the failure report was saved. |
 | [After revert](https://github.com/nha6ki/web-regression/actions/runs/45026915548) | `4d68215` | All four tests passed again, and the recovery report was saved. |
+
+The Snipe-IT tests use MariaDB and a disposable personal access token issued inside the Compose project.

@@ -57,6 +57,36 @@ services:
       PAPERLESS_URL: http://paperless:8000
       PAPERLESS_TASK_WORKERS: "1"
       PAPERLESS_THREADS_PER_WORKER: "1"
+  snipe-db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_DATABASE: assets
+      MARIADB_USER: assets
+      MARIADB_PASSWORD: ${QA_PASSWORD:?start using run.sh}
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+  snipe:
+    image: snipe/snipe-it:v8.3.6
+    depends_on:
+      snipe-db:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: http://snipe
+      APP_KEY: ${SNIPE_APP_KEY:?start using run.sh}
+      DB_CONNECTION: mysql
+      DB_HOST: snipe-db
+      DB_DATABASE: assets
+      DB_USERNAME: assets
+      DB_PASSWORD: ${QA_PASSWORD:?start using run.sh}
+      MAIL_MAILER: log
+      APP_TIMEZONE: UTC
+      APP_LOCALE: en-US
   tests:
     image: mcr.microsoft.com/playwright:v1.56.1-noble
     working_dir: /tmp

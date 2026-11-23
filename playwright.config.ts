@@ -3,6 +3,11 @@ export default defineConfig({
   testDir: './tests',
   projects: [
     {
+      name: 'snipe',
+      testMatch: /snipe.*\.spec\.ts$/,
+      use: { baseURL: 'http://snipe' },
+    },
+    {
       name: 'paperless',
       testMatch: /paperless.*\.spec\.ts$/,
       use: { baseURL: 'http://paperless:8000' },
