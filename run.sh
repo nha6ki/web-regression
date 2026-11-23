@@ -16,7 +16,7 @@ project="webreg-$$-$(date +%s)"
 dc=(docker compose -p "$project")
 cleanup() { "${dc[@]}" down -v --remove-orphans; }
 trap cleanup EXIT
-"${dc[@]}" up -d gitea vikunja grist paperless snipe wordpress nextcloud
+"${dc[@]}" up -d gitea vikunja grist paperless snipe wordpress nextcloud moodle
 wait_for_service() {
   local service=$1 url=$2 attempts=$3 i
   for ((i = 0; i < attempts; i++)); do
@@ -88,5 +88,22 @@ unzip -q "$plugin_tmp/woocommerce.zip" -d "$plugin_tmp"
 wait_for_service nextcloud http://nextcloud/status.php 150
 "${dc[@]}" exec -T --user www-data nextcloud php occ app:enable files_trashbin
 "${dc[@]}" exec -T --user www-data nextcloud php occ app:disable firstrunwizard
+# Bootstrap a separate course site in the disposable Moodle container.
+curl -fsSL --retry 3 https://packaging.moodle.org/stable405/moodle-4.5.16.tgz -o "$plugin_tmp/moodle.tgz"
+(cd "$plugin_tmp" && echo '44b77196f6a7a73ad15a329d5669a7fbd9624b6b58b132e4e69ffebc7dcc2031  moodle.tgz' | sha256sum -c -)
+moodle_exec=("${dc[@]}" exec -T moodle)
+"${moodle_exec[@]}" tar -xz --strip-components=1 -C /var/www/html < "$plugin_tmp/moodle.tgz"
+"${moodle_exec[@]}" install -d -o www-data -g www-data /var/www/moodledata
+# Allow the installer to write config.php, then run it as the HTTP worker.
+"${moodle_exec[@]}" chown www-data:www-data /var/www/html
+moodle_cli=("${dc[@]}" exec -T --user www-data -e QA_PASSWORD -w /var/www/html moodle)
+"${moodle_cli[@]}" php -d max_input_vars=5000 admin/cli/install.php --non-interactive --agree-license \
+  --wwwroot=http://moodle --dataroot=/var/www/moodledata --dbtype=pgsql --dbhost=moodle-db \
+  --dbname=moodle --dbuser=moodle --dbpass="$QA_PASSWORD" --fullname="QA Learning" --shortname=QA \
+  --adminuser=qaadmin --adminpass="$QA_PASSWORD" --adminemail=admin@example.test
+"${moodle_cli[@]}" php < tests/support/moodle-course.php
+MOODLE_FIXTURES=$("${moodle_cli[@]}" cat /tmp/qa-assignment-ids.json)
+export MOODLE_FIXTURES
+wait_for_service moodle http://moodle/login/index.php 90
 echo "HTML report: $REPORT_DIR/html/index.html"
-"${dc[@]}" run --rm -e SNIPE_TOKEN tests
+"${dc[@]}" run --rm -e SNIPE_TOKEN -e MOODLE_FIXTURES tests

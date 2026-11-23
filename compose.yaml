@@ -121,6 +121,22 @@ services:
       NEXTCLOUD_ADMIN_USER: qaoperator
       NEXTCLOUD_ADMIN_PASSWORD: ${QA_PASSWORD:?start using run.sh}
       NEXTCLOUD_TRUSTED_DOMAINS: nextcloud
+  moodle-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: moodle
+      POSTGRES_USER: moodle
+      POSTGRES_PASSWORD: ${QA_PASSWORD:?start using run.sh}
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "moodle", "-d", "moodle"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+  moodle:
+    image: moodlehq/moodle-php-apache:8.3
+    depends_on:
+      moodle-db:
+        condition: service_healthy
   tests:
     image: mcr.microsoft.com/playwright:v1.56.1-noble
     working_dir: /tmp

@@ -1,4 +1,4 @@
-# Web regression tests for Gitea, Vikunja, Grist, Paperless-ngx, Snipe-IT WordPress, WooCommerce and Nextcloud
+# Web regression tests for Gitea, Vikunja, Grist, Paperless-ngx, Snipe-IT WordPress, WooCommerce, Nextcloud and Moodle
 
 This Playwright suite tests whether Japanese issue and task data survives a round trip through a web application. It creates records in Chromium, reads them back by ID through the application API, and checks their contents. Two additional Gitea scenarios cover search after a title edit and access to an issue in a private repository.
 
@@ -10,14 +10,19 @@ Requirements: Linux or Windows with WSL2, Bash, and a running Docker Engine with
 bash run.sh
 ```
 
-The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **25 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
+The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **28 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
 
 The runner also uses host curl and unzip to install WooCommerce 11.3.0 from downloads.wordpress.org. Three store tests check cart quantities, saved order lines and product-specific discounts. The fixtures use Japanese yen, virtual products, and an offline payment method.
 
-## What the twenty-five tests check
+Moodle uses a separate PostgreSQL database and PHP container. The runner fetches Moodle 4.5.16 from packaging.moodle.org and verifies the archive checksum before installing it. The course has a teacher, two enrolled students and a separate assignment for each case.
+
+## What the twenty-eight tests check
 
 | Scenario | Action | Evidence checked |
 | --- | --- | --- |
+| Moodle submission | A student uploads a Japanese-named assignment file and submits it. | The teacher retrieves that student's submitted file and compares all bytes. |
+| Moodle feedback | The teacher grades a submitted assignment. | The student sees the grade and written feedback on the assignment page. |
+| Moodle independent grading | Two students submit to the same assignment. | After grading one student, their grade exists and the other submission remains ungraded. |
 | Nextcloud file move | Move a Japanese-named text file to a second folder. | The source returns 404, the destination returns the original bytes, and Files shows the name in the destination folder. |
 | Nextcloud trash restore | Delete a file and restore its matching trash entry. | The original path first returns 404 and then returns the original bytes. |
 | Nextcloud same-name files | Overwrite one of two files with the same name in separate folders. | Both paths return the expected, distinct contents. |

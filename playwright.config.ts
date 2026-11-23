@@ -3,6 +3,11 @@ export default defineConfig({
   testDir: './tests',
   projects: [
     {
+      name: 'moodle',
+      testMatch: /moodle\.spec\.ts$/,
+      use: { baseURL: 'http://moodle' },
+    },
+    {
       name: 'nextcloud',
       testMatch: /nextcloud\.spec\.ts$/,
       use: { baseURL: 'http://nextcloud' },
