@@ -16,7 +16,7 @@ project="webreg-$$-$(date +%s)"
 dc=(docker compose -p "$project")
 cleanup() { "${dc[@]}" down -v --remove-orphans; }
 trap cleanup EXIT
-"${dc[@]}" up -d gitea vikunja grist paperless snipe
+"${dc[@]}" up -d gitea vikunja grist paperless snipe wordpress
 wait_for_service() {
   local service=$1 url=$2 attempts=$3 i
   for ((i = 0; i < attempts; i++)); do
@@ -75,5 +75,7 @@ export SNIPE_TOKEN
 if [[ ${GITHUB_ACTIONS:-} == true ]]; then
   printf '::add-mask::%s\n' "$SNIPE_TOKEN"
 fi
+wait_for_service wordpress http://wordpress/wp-admin/install.php 120
+"${dc[@]}" exec -T --user www-data wordpress php < tests/support/wordpress-install.php
 echo "HTML report: $REPORT_DIR/html/index.html"
 "${dc[@]}" run --rm -e SNIPE_TOKEN tests

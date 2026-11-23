@@ -1,4 +1,4 @@
-# Web regression tests for Gitea, Vikunja, Grist, Paperless-ngx and Snipe-IT
+# Web regression tests for Gitea, Vikunja, Grist, Paperless-ngx, Snipe-IT and WordPress
 
 This Playwright suite tests whether Japanese issue and task data survives a round trip through a web application. It creates records in Chromium, reads them back by ID through the application API, and checks their contents. Two additional Gitea scenarios cover search after a title edit and access to an issue in a private repository.
 
@@ -10,9 +10,9 @@ Requirements: Linux or Windows with WSL2, Bash, and a running Docker Engine with
 bash run.sh
 ```
 
-The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **16 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
+The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **19 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
 
-## What the sixteen tests check
+## What the nineteen tests check
 
 | Scenario | Action | Evidence checked |
 | --- | --- | --- |
@@ -26,18 +26,21 @@ The first run downloads the container images. Each run installs the dependencies
 | [Grist invoice recalculation](tests/grist.spec.ts) | Edit the quantity on an invoice line in Chromium. | After reloading, the line shows the updated amount. The API returns the original row ID, quantity 3 and total 7500. |
 | Grist item correction | Edit the Japanese item name in Chromium. | The row ID, quantity, price and amount are preserved. |
 | Grist line removal | Delete one seeded line by ID through the API and reload the grid. | Only the other record remains with its original values. |
-| Paperless PDF ingestion | Upload a text PDF from the dashboard. | The completed task identifies a document with the expected title and the original PDF bytes. |
+| Paperless PDF ingestion | Upload a text PDF from the dashboard. | The document list gains a new ID with the expected title and the original PDF bytes. |
 | Paperless classification | Assign a correspondent and a tag to an imported document through the API. | A fresh API read returns both IDs for that document. |
 | Paperless tag filter | Open the document list filtered by one tag. | The UI includes the tagged document and excludes the control. The API returns exactly the tagged ID. |
 | Snipe-IT checkout | Lend an asset via API. | A fresh read returns the intended user ID and the UI displays the asset tag. |
 | Snipe-IT check-in | Return an assigned asset via API. | The same ID has no assignee after check-in. |
 | Snipe-IT model identity | Check out one of two assets of the same model. | The two IDs retain distinct assignment states. |
+| WordPress draft visibility | Save a Japanese draft as an editor. | Its ID and raw text match the editor API response. An anonymous reader cannot retrieve the draft or read it at its URL. |
+| WordPress publication | Publish a draft through Quick Edit in the posts list. | The public API and a fresh reader session see the same post and text. |
+| WordPress correction | Correct the body of a published announcement through the editor API. | The original URL shows the correction after reload and the post keeps its ID. |
 
 ## Test environment
 
-[Docker Compose](compose.yaml) starts Gitea 1.27.3 with SQLite and Vikunja 0.24.6 with PostgreSQL 16, alongside Grist 1.7.20 in single-user mode on the isolated Compose network. Paperless-ngx 3.5.1 uses its local database and a Redis broker. Its dashboard uses automatic login inside the test network. The test container reaches all five applications over the Compose network without publishing host ports. Each run gets a separate Compose project and a generated password. On exit, the runner removes that project's containers and volumes. Reports remain on the host.
+[Docker Compose](compose.yaml) starts Gitea 1.27.3 with SQLite and Vikunja 0.24.6 with PostgreSQL 16, alongside Grist 1.7.20 in single-user mode on the isolated Compose network. Paperless-ngx 3.5.1 uses its local database and a Redis broker. Its dashboard uses automatic login inside the test network. The test container reaches all six applications over the Compose network without publishing host ports. Each run gets a separate Compose project and a generated password. On exit, the runner removes that project's containers and volumes. Reports remain on the host.
 
-All five applications use the same [Playwright configuration](playwright.config.ts) and HTML reporter. The suite runs Chromium with one worker and zero test retries. The [GitHub Actions workflow](.github/workflows/regression.yml) calls the same `bash run.sh` entry point on Ubuntu for pushes, pull requests, and manual runs. After a completed test run, the workflow uploads the HTML report, including when a test fails. Artifact retention is set to 14 days.
+All six applications use the same [Playwright configuration](playwright.config.ts) and HTML reporter. The suite runs Chromium with one worker and zero test retries. The [GitHub Actions workflow](.github/workflows/regression.yml) calls the same `bash run.sh` entry point on Ubuntu for pushes, pull requests, and manual runs. After a completed test run, the workflow uploads the HTML report, including when a test fails. Artifact retention is set to 14 days.
 
 ## Troubleshooting and artifacts
 
@@ -60,3 +63,5 @@ The failure drill changed only the expected Vikunja title on a dedicated branch.
 | [After revert](https://github.com/nha6ki/web-regression/actions/runs/45026915548) | `4d68215` | All four tests passed again, and the recovery report was saved. |
 
 The Snipe-IT tests use MariaDB and a disposable personal access token issued inside the Compose project.
+
+WordPress runs with its own MariaDB database, a test editor account and a separate anonymous browser session.

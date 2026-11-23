@@ -87,6 +87,33 @@ services:
       MAIL_MAILER: log
       APP_TIMEZONE: UTC
       APP_LOCALE: en-US
+  wp-db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: ${QA_PASSWORD:?start using run.sh}
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+  wordpress:
+    image: wordpress:7.1.5-php8.3-apache
+    depends_on:
+      wp-db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: wp-db
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: ${QA_PASSWORD:?start using run.sh}
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_HOME', 'http://wordpress');
+        define('WP_SITEURL', 'http://wordpress');
+        define('WP_HTTP_BLOCK_EXTERNAL', true);
+        define('DISABLE_WP_CRON', true);
   tests:
     image: mcr.microsoft.com/playwright:v1.56.1-noble
     working_dir: /tmp
