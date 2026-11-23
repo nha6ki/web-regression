@@ -3,6 +3,11 @@ export default defineConfig({
   testDir: './tests',
   projects: [
     {
+      name: 'paperless',
+      testMatch: /paperless.*\.spec\.ts$/,
+      use: { baseURL: 'http://paperless:8000' },
+    },
+    {
       name: 'grist',
       testMatch: /grist.*\.spec\.ts$/,
       use: { baseURL: 'http://grist:8484', locale: 'en-US' },

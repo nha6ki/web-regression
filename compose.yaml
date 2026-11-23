@@ -42,6 +42,21 @@ services:
       GRIST_FORCE_LOGIN: "true"
       APP_HOME_URL: http://grist:8484
       GRIST_WIDGET_LIST_URL: ""
+  broker:
+    image: redis:7-alpine
+  paperless:
+    image: ghcr.io/paperless-ngx/paperless-ngx:3.5.1
+    depends_on:
+      - broker
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_ADMIN_USER: qaoperator
+      PAPERLESS_ADMIN_PASSWORD: ${QA_PASSWORD:?start using run.sh}
+      PAPERLESS_SECRET_KEY: ${QA_PASSWORD:?start using run.sh}
+      PAPERLESS_AUTO_LOGIN_USERNAME: qaoperator
+      PAPERLESS_URL: http://paperless:8000
+      PAPERLESS_TASK_WORKERS: "1"
+      PAPERLESS_THREADS_PER_WORKER: "1"
   tests:
     image: mcr.microsoft.com/playwright:v1.56.1-noble
     working_dir: /tmp
