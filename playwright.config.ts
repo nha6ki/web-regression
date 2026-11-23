@@ -3,6 +3,11 @@ export default defineConfig({
   testDir: './tests',
   projects: [
     {
+      name: 'woocommerce',
+      testMatch: /woocommerce\.spec\.ts$/,
+      use: { baseURL: 'http://wordpress' },
+    },
+    {
       name: 'wordpress',
       testMatch: /wordpress.*\.spec\.ts$/,
       use: { baseURL: 'http://wordpress' },

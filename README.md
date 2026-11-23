@@ -1,4 +1,4 @@
-# Web regression tests for Gitea, Vikunja, Grist, Paperless-ngx, Snipe-IT and WordPress
+# Web regression tests for Gitea, Vikunja, Grist, Paperless-ngx, Snipe-IT WordPress and WooCommerce
 
 This Playwright suite tests whether Japanese issue and task data survives a round trip through a web application. It creates records in Chromium, reads them back by ID through the application API, and checks their contents. Two additional Gitea scenarios cover search after a title edit and access to an issue in a private repository.
 
@@ -10,9 +10,11 @@ Requirements: Linux or Windows with WSL2, Bash, and a running Docker Engine with
 bash run.sh
 ```
 
-The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **19 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
+The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **22 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
 
-## What the nineteen tests check
+The runner also uses host curl and unzip to install WooCommerce 11.3.0 from downloads.wordpress.org. Three store tests check cart quantities, saved order lines and product-specific discounts. The fixtures use Japanese yen, virtual products, and an offline payment method.
+
+## What the twenty-two tests check
 
 | Scenario | Action | Evidence checked |
 | --- | --- | --- |

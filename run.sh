@@ -77,5 +77,13 @@ if [[ ${GITHUB_ACTIONS:-} == true ]]; then
 fi
 wait_for_service wordpress http://wordpress/wp-admin/install.php 120
 "${dc[@]}" exec -T --user www-data wordpress php < tests/support/wordpress-install.php
+# Install the pinned plugin into this run's disposable WordPress container.
+plugin_tmp=$(mktemp -d)
+trap 'rm -rf -- "$plugin_tmp"; cleanup' EXIT
+curl -fsSL --retry 3 https://downloads.wordpress.org/plugin/woocommerce.11.3.0.zip -o "$plugin_tmp/woocommerce.zip"
+unzip -q "$plugin_tmp/woocommerce.zip" -d "$plugin_tmp"
+"${dc[@]}" cp "$plugin_tmp/woocommerce" wordpress:/var/www/html/wp-content/plugins/
+"${dc[@]}" exec -T --user www-data wordpress php < tests/support/woocommerce-install.php
+"${dc[@]}" exec -T -e WC_SEED=yes --user www-data wordpress php < tests/support/woocommerce-install.php
 echo "HTML report: $REPORT_DIR/html/index.html"
 "${dc[@]}" run --rm -e SNIPE_TOKEN tests
