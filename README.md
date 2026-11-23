@@ -10,9 +10,9 @@ On Windows, enable Docker Desktop's WSL integration for your Ubuntu distribution
 bash run.sh
 ```
 
-The first run downloads the container images. Each run installs the pinned Playwright test package inside the test container, which supplies Node.js and Chromium. A successful run ends with **4 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
+The first run downloads the container images. Each run installs the pinned Playwright test package inside the test container, which supplies Node.js and Chromium. A successful run ends with **7 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
 
-## What the four tests check
+## What the seven tests check
 
 | Scenario | Action | Evidence checked |
 | --- | --- | --- |
@@ -20,6 +20,9 @@ The first run downloads the container images. Each run installs the pinned Playw
 | [Gitea issue lifecycle](tests/gitea-lifecycle.spec.ts) | Rename an issue through the API, load the issue list with the new title as the search query, and open the matching result. | The unrelated issue is absent from the results. The selected link opens the original issue number. After closing it through the API, a fresh read returns `closed`. |
 | [Gitea private issue visibility](tests/gitea-visibility.spec.ts) | Request the same issue as a read collaborator and as a signed-in nonmember, through both the UI and API. | The collaborator sees the title and body. The nonmember receives HTTP 403 or 404, and both strings are absent from the API response and rendered page. |
 | [Vikunja task creation](tests/vikunja.spec.ts) | Create a task titled `月次報告の資料を確認` in the project view and confirm it appears on screen. | Fetch the task by the ID returned by the create request. The API must return the submitted title, the expected project ID, and `done: false`. |
+| [Vikunja completion](tests/vikunja-workflows.spec.ts) | Complete a task and reload its detail view. | The UI offers to reopen it and its API record is complete. |
+| [Vikunja empty title](tests/vikunja-workflows.spec.ts) | Press Enter in an empty task field. | The project keeps exactly the original task IDs. |
+| [Vikunja same-title tasks](tests/vikunja-workflows.spec.ts) | Complete one of two identically named tasks in different projects. | Only the selected ID is complete. |
 
 ## Test environment
 
@@ -27,7 +30,7 @@ The first run downloads the container images. Each run installs the pinned Playw
 
 Both applications use the same [Playwright configuration](playwright.config.ts) and HTML reporter. The suite runs with one worker and zero test retries. The [GitHub Actions workflow](.github/workflows/regression.yml) calls the same `bash run.sh` entry point on Ubuntu for pushes, pull requests, and manual runs. After a completed test run, the workflow uploads the HTML report, including when a test fails. Artifact retention is set to 14 days.
 
-## CI evidence
+## CI evidence for the original four tests
 
 The failure drill changed only the expected Vikunja title on a dedicated branch. The browser still submitted `月次報告の資料を確認`, while the API assertion expected `請求書を照合`. The failure report recorded both values. Reverting the assertion restored the baseline.
 
