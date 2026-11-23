@@ -4,13 +4,13 @@ This Playwright suite tests whether Japanese issue and task data survives a roun
 
 ## Run the suite
 
-On Windows, enable Docker Desktop's WSL integration for your Ubuntu distribution. From the repository root in WSL, run:
+Requirements: Linux or Windows with WSL2, Bash, and a running Docker Engine with the Compose v2 CLI or newer. The runner uses the Linux kernel UUID generator. On Windows, enable Docker Desktop's WSL integration for your Ubuntu distribution. From the repository root in WSL, run:
 
 ```bash
 bash run.sh
 ```
 
-The first run downloads the container images. Each run installs the pinned Playwright test package inside the test container, which supplies Node.js and Chromium. A successful run ends with **7 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
+The first run downloads the container images. Each run installs the dependencies in `package-lock.json` with `npm ci` inside the test container, which supplies Node.js and Chromium. Host installations of Node.js, npm and browsers are optional. The runner needs access to the image registries and npm registry. A successful run ends with **7 passed**. Open the HTML report at the path printed by the script, under `reports/<timestamp>-<pid>/html/index.html`. Failed browser tests also capture a screenshot.
 
 ## What the seven tests check
 
@@ -28,9 +28,19 @@ The first run downloads the container images. Each run installs the pinned Playw
 
 [Docker Compose](compose.yaml) starts Gitea 1.27.3 with SQLite and Vikunja 0.24.6 with PostgreSQL 16. The test container reaches both applications over the Compose network without publishing host ports. Each run gets a separate Compose project and a generated password. On exit, the runner removes that project's containers and volumes. Reports remain on the host.
 
-Both applications use the same [Playwright configuration](playwright.config.ts) and HTML reporter. The suite runs with one worker and zero test retries. The [GitHub Actions workflow](.github/workflows/regression.yml) calls the same `bash run.sh` entry point on Ubuntu for pushes, pull requests, and manual runs. After a completed test run, the workflow uploads the HTML report, including when a test fails. Artifact retention is set to 14 days.
+Both applications use the same [Playwright configuration](playwright.config.ts) and HTML reporter. The suite runs Chromium with one worker and zero test retries. The [GitHub Actions workflow](.github/workflows/regression.yml) calls the same `bash run.sh` entry point on Ubuntu for pushes, pull requests, and manual runs. After a completed test run, the workflow uploads the HTML report, including when a test fails. Artifact retention is set to 14 days.
 
-## CI evidence for the original four tests
+## Troubleshooting and artifacts
+
+Run `docker info` and `docker compose version` from the same shell if startup fails. Open the printed HTML file to inspect a test and its attachments. Keep the entire HTML directory together. Reports can include screenshots, visible input values and internal URLs. Older reports from revision `72da163` also contain the disposable login password in recorded input steps. Review them before sharing. The test accounts and passwords are disposable.
+
+The Compose service names are internal DNS names. To update Playwright, change both the test image and the npm package to the same version and regenerate the lockfile. Application image tags and the CI runner can receive upstream updates.
+
+## Recorded results
+
+Before this refactor, revision `72da163` passed all seven cases on WSL and in GitHub Actions (run `45093189062`). Run the suite against the current revision for its own results.
+
+### CI evidence for the original four tests
 
 The failure drill changed only the expected Vikunja title on a dedicated branch. The browser still submitted `月次報告の資料を確認`, while the API assertion expected `請求書を照合`. The failure report recorded both values. Reverting the assertion restored the baseline.
 

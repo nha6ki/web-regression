@@ -39,14 +39,17 @@ services:
     environment:
       QA_PASSWORD: ${QA_PASSWORD:-}
     volumes:
-      - ./:/source:ro
+      - ./package.json:/source/package.json:ro
+      - ./package-lock.json:/source/package-lock.json:ro
+      - ./playwright.config.ts:/source/playwright.config.ts:ro
+      - ./tests:/source/tests:ro
       - ${REPORT_DIR:-./reports}:/output
     command:
       - bash
       - -ec
       - |
         mkdir -p /tmp/suite
-        cp -r /source/package.json /source/tests /source/playwright.config.ts /tmp/suite/
+        cp -r /source/package.json /source/package-lock.json /source/tests /source/playwright.config.ts /tmp/suite/
         cd /tmp/suite
-        npm install --no-audit --no-fund
+        npm ci --ignore-scripts --no-audit --no-fund
         npx playwright test
