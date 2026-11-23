@@ -1,8 +1,8 @@
-# Web regression tests for Gitea, Vikunja, Grist, Paperless-ngx, Snipe-IT WordPress, WooCommerce, Nextcloud and Moodle
+# Web application regression tests
 
-This Playwright suite tests whether Japanese issue and task data survives a round trip through a web application. It creates records in Chromium, reads them back by ID through the application API, and checks their contents. Two additional Gitea scenarios cover search after a title edit and access to an issue in a private repository.
+The Docker suite runs 28 Playwright cases across nine applications. The [Shopify cart suite](#shopify-cart-tests) adds three cases against a development storefront and runs separately in Microsoft Edge.
 
-## Run the suite
+## Run the Docker suite
 
 Requirements: Linux or Windows with WSL2, Bash, and a running Docker Engine with the Compose v2 CLI or newer. The runner uses the Linux kernel UUID generator. On Windows, enable Docker Desktop's WSL integration for your Ubuntu distribution. From the repository root in WSL, run:
 
@@ -75,3 +75,28 @@ The failure drill changed only the expected Vikunja title on a dedicated branch.
 The Snipe-IT tests use MariaDB and a disposable personal access token issued inside the Compose project.
 
 WordPress runs with its own MariaDB database, a test editor account and a separate anonymous browser session.
+
+
+## Shopify cart tests
+
+Use Windows PowerShell with Node.js, npm and Microsoft Edge installed. In your Shopify development store, publish a product with the handle `qa-notebook` to the Online Store. Give it exactly two variants with first-option values `Red` and `Blue`. Both must have positive prices and be available for sale, with at least two red units and one blue unit available. Use a product and cart without automatic discounts.
+
+From the repository root, replace the example hostname with your development store's hostname and run:
+
+```powershell
+npm.cmd ci --ignore-scripts --no-audit --no-fund
+$env:SHOPIFY_QA_STORE = 'your-dev-store.myshopify.com'
+& '.\node_modules\.bin\playwright.cmd' test -c external/shopify/playwright.config.ts
+```
+
+If prompted, enter the storefront password in the Edge window within three minutes. Each test starts with an empty cart. The tests use the storefront cart API to:
+
+1. Add the blue variant and confirm its ID and quantity in the saved cart, then check that the cart page displays the product link and color.
+2. Change the red quantity from one to two and compare both the line amount and cart total with twice the unit price.
+3. Remove blue from a two-color cart and confirm that the two red units remain.
+
+The Windows/Edge run reported **3 passed (15.4s)**. These cases stop at the cart and run independently of the [28-case CI run](https://github.com/nha6ki/web-regression/actions/runs/45129469117). To open the local Shopify report:
+
+```powershell
+& '.\node_modules\.bin\playwright.cmd' show-report reports/shopify/html
+```
