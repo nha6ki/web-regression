@@ -161,3 +161,74 @@ test('割引後に注文すると対象明細・割引額・請求合計が同�
     expect(Number(line.total)).toBe(expected);
   }
 });
+
+test('クーポン適用後に画面で数量を変更し、再読込後の金額と確定注文を照合する', async ({ page }, info) => {
+  const paper = await openCouponCart(page);
+  const envelope = await product(page.request, 'envelope');
+  await page.goto('/?add-to-cart=' + envelope);
+  await page.goto('/?pagename=qa-cart');
+
+  const totals = page.locator('.cart_totals');
+  const total = totals.locator('.order-total .amount');
+  const discount = totals.locator('.coupon-proof-only .amount');
+  const paperQty = page.locator('tr.cart_item').filter({ hasText: '校正用紙' }).locator('input.qty');
+  const envelopeQty = page.locator('tr.cart_item').filter({ hasText: '封筒' }).locator('input.qty');
+  // WooCommerce may display a yen symbol and thousands separator.
+  const yen = (amount: number) => new RegExp('^\\s*[¥￥]?\\s*' +
+    amount.toLocaleString('en-US').replace(',', ',?') + '\\s*$');
+  await expect(total).toHaveText(yen(1500));
+  await page.locator('#coupon_code').fill('proof-only');
+  await page.locator('[name=apply_coupon]').click();
+  await expect(total).toHaveText(yen(1300));
+  await expect(discount).toHaveText(/^\s*[-–−]\s*[¥￥]?\s*200\s*$/);
+
+  await paperQty.fill('2');
+  await page.locator('[name=update_cart]').click();
+  await expect(total).toHaveText(yen(2300));
+  await page.reload();
+  await expect(paperQty).toHaveValue('2');
+  await expect(envelopeQty).toHaveValue('1');
+  await expect(total).toHaveText(yen(2300));
+  await expect(discount).toHaveText(/^\s*[-–−]\s*[¥￥]?\s*400\s*$/);
+  await info.attach('cart-after-reload.png', { body: await totals.screenshot(), contentType: 'image/png' });
+
+  const basket = await readCart(page);
+  expect(basket.totals).toMatchObject({ currency_code: 'JPY', currency_minor_unit: 0, total_discount: '400', total_price: '2300' });
+  expect(basket.coupons).toMatchObject([{ code: 'proof-only' }]);
+  expect(basket.items).toHaveLength(2);
+  for (const [id, quantity, subtotal, net] of [[paper, 2, 2400, 2000], [envelope, 1, 300, 300]]) {
+    const item = basket.items.find((x: { id: number }) => x.id === id);
+    expect(item).toMatchObject({ quantity, totals: { line_subtotal: String(subtotal), line_total: String(net) } });
+  }
+
+  // Use the shopper's cookies so checkout consumes the cart edited on screen.
+  const post = await cart(page.request);
+  const receipt = await post('checkout', { billing_address: billingAddress, payment_method: 'bacs' });
+  expect(receipt.order_id).toBeGreaterThan(0);
+  const order = await savedOrder(page, receipt.order_id);
+  expect(order).toMatchObject({ id: receipt.order_id, currency: 'JPY', payment_method: 'bacs' });
+  expect(order.coupon_lines).toMatchObject([{ code: 'proof-only' }]);
+  expect(Number(order.discount_total)).toBe(Number(basket.totals.total_discount));
+  expect(Number(order.total)).toBe(Number(basket.totals.total_price));
+  expect(order.line_items).toHaveLength(2);
+  for (const item of basket.items) {
+    const line = order.line_items.find((x: { product_id: number }) => x.product_id === item.id);
+    expect(line).toMatchObject({ quantity: item.quantity });
+    expect(Number(line.subtotal)).toBe(Number(item.totals.line_subtotal));
+    expect(Number(line.total)).toBe(Number(item.totals.line_total));
+  }
+  await info.attach('order-reconciliation.json', {
+    contentType: 'application/json',
+    body: JSON.stringify({ orderId: order.id, cartTotal: basket.totals.total_price,
+      discount: order.discount_total, orderTotal: order.total, currency: order.currency,
+      lines: order.line_items.map((x: { product_id: number; quantity: number; subtotal: string; total: string }) =>
+        ({ productId: x.product_id, quantity: x.quantity, subtotal: x.subtotal, total: x.total })) }, null, 2),
+  });
+
+  await page.goto('/wp-admin/admin.php?page=wc-orders&action=edit&id=' + order.id);
+  const panel = page.locator('#woocommerce-order-items');
+  if (!await panel.count()) await page.goto('/wp-admin/post.php?action=edit&post=' + order.id);
+  await expect(panel).toContainText('校正用紙');
+  await expect(panel).toContainText('封筒');
+  await info.attach('stored-order.png', { body: await panel.screenshot(), contentType: 'image/png' });
+});
