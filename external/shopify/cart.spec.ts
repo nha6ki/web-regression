@@ -407,17 +407,81 @@ test('赤を別々に2回追加すると同じ明細に集約される', async (
   }
 });
 
-test('同じ買い物セッションの別タブでカートの商品と数量を引き継ぐ', async ({ page, context }) => {
-  await change(page.request, 'add', { items: [{ id: second.id, quantity: 1 }] });
-  await page.goto(root + 'products/qa-notebook');
-  const tab = await context.newPage();
-  await tab.goto(root + 'cart');
-  await tab.reload();
-  await expect(tab.locator('a[href*="/products/qa-notebook"]').filter({ visible: true }).first()).toBeVisible();
-  await expect(tab.getByText(/Blue/).filter({ visible: true }).first()).toBeVisible();
-  const saved = await cart(tab.request);
-  expect(saved.items).toMatchObject([{ variant_id: second.id, quantity: 1 }]);
-  expect(saved.total_price).toBe(second.price);
+test('SH-06 別タブで赤を買い足し、元のタブを再読み込みして色別の冊数と合計を照合する', async ({ page, context }, info) => {
+  await change(page.request, 'add', { items: [
+    { id: first.id, quantity: 1 }, { id: second.id, quantity: 1 },
+  ] });
+  const cartUrl = root + 'cart';
+  const money = (cents: number) => '$' + (cents / 100).toFixed(2);
+  const quantity = 'input[type="number"]:visible';
+
+  function cartView(tab: typeof page) {
+    const rows = tab.locator('#cart-form tr').filter({ has: tab.locator(quantity) });
+    return {
+      rows,
+      red: rows.filter({ hasText: 'Red' }),
+      blue: rows.filter({ hasText: 'Blue' }),
+      total: tab.getByTestId('cart-total-value'),
+    };
+  }
+
+  async function verifyView(tab: typeof page, redCount: number) {
+    const view = cartView(tab);
+    await expect(view.rows).toHaveCount(2);
+    await expect(view.red.locator(quantity)).toHaveValue(String(redCount));
+    await expect(view.blue.locator(quantity)).toHaveValue('1');
+    const total = money(first.price * redCount + second.price);
+    await expect(view.total).toHaveText(total + ' USD');
+  }
+
+  async function capture(tab: typeof page, name: string) {
+    await info.attach(name, { body: await tab.getByRole('main').screenshot(), contentType: 'image/png' });
+  }
+
+  await page.goto(cartUrl);
+  await verifyView(page, 1);
+  await capture(page, '01-original-cart.png');
+
+  const otherTab = await context.newPage();
+  try {
+    await otherTab.goto(cartUrl);
+    await verifyView(otherTab, 1);
+    const red = cartView(otherTab).red;
+    const increment = red.getByRole('button', { name: /increase|increment|plus|^\+$/i })
+      .or(red.locator('button[name="plus"], button.quantity-plus, button.plus')).filter({ visible: true });
+    await expect(increment).toHaveCount(1);
+    await increment.click();
+    await verifyView(otherTab, 2);
+    await capture(otherTab, '02-second-tab-updated.png');
+
+    await page.bringToFront();
+    await page.reload();
+    await verifyView(page, 2);
+    const saved = await cart(page.request);
+    expect(saved.items).toHaveLength(2);
+    expect(saved.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ variant_id: first.id, quantity: 2, final_line_price: first.price * 2 }),
+      expect.objectContaining({ variant_id: second.id, quantity: 1, final_line_price: second.price }),
+    ]));
+    expect(saved.item_count).toBe(3);
+    expect(saved.total_price).toBe(first.price * 2 + second.price);
+    await capture(page, '03-original-tab-reloaded.png');
+    await info.attach('two-tab-cart.json', {
+      contentType: 'application/json',
+      body: JSON.stringify({
+        currency: 'USD',
+        displayedTotal: await cartView(page).total.innerText(),
+        itemCount: saved.item_count,
+        totalCents: saved.total_price,
+        lines: saved.items.map(item => ({
+          variantId: item.variant_id, color: item.variant_id === first.id ? 'Red' : 'Blue',
+          quantity: item.quantity, lineCents: item.final_line_price,
+        })),
+      }, null, 2),
+    });
+  } finally {
+    await otherTab.close();
+  }
 });
 
 test('SH-07 ゲストのテスト決済を店舗の受注と照合する', async ({ page, playwright }, info) => {
