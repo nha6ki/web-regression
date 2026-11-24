@@ -8,5 +8,8 @@ export default defineConfig({
   timeout: 60000,
   outputDir: '../../reports/shopify/test-results',
   reporter: [['list'], ['html', { outputFolder: '../../reports/shopify/html', open: 'never' }]],
-  use: { channel: 'msedge', headless: false },
+  use: {
+    channel: 'msedge', headless: false,
+    video: process.env.SHOPIFY_QA_VIDEO === '1' ? { mode: 'on', size: { width: 390, height: 844 } } : 'off',
+  },
 });
