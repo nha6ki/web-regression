@@ -1,7 +1,11 @@
 name: Web regression
 on:
   push:
+    paths-ignore:
+      - 'external/shopify/**'
   pull_request:
+    paths-ignore:
+      - 'external/shopify/**'
   workflow_dispatch:
 
 permissions:
