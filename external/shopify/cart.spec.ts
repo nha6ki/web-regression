@@ -265,16 +265,63 @@ test('SH-02 赤だけを買い足し、色別の冊数と商品小計がチェ�
   await info.attach('03-checkout.png', { body: await page.screenshot(), contentType: 'image/png' });
 });
 
-test('一方の色を削除しても他方の数量が維持される', async ({ page }) => {
-  await change(page.request, 'add', { items: [{ id: first.id, quantity: 2 }, { id: second.id, quantity: 1 }] });
-  const before = await cart(page.request);
-  expect(before.items).toHaveLength(2);
-  const selected = before.items.find(item => item.variant_id === second.id);
-  expect(selected).toBeDefined();
-  await change(page.request, 'change', { id: selected!.key, quantity: 0 });
+test('SH-03 購入前に青だけを削除し、赤2冊の小計をチェックアウトと照合する', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const money = (cents: number) => '$' + (cents / 100).toFixed(2);
+  const redAmount = first.price * 2;
+  await change(page.request, 'add', { items: [
+    { id: first.id, quantity: 2 }, { id: second.id, quantity: 1 },
+  ] });
+  await page.goto(root + 'cart');
+  const form = page.locator('#cart-form');
+  const productRows = form.locator('tr').filter({
+    has: page.locator('input[type="number"]:visible'),
+  });
+  const red = productRows.filter({ hasText: 'Red' });
+  const blue = productRows.filter({ hasText: 'Blue' });
+  const qty = 'input[type="number"]:visible';
+  await expect(productRows).toHaveCount(2);
+  await expect(red.locator(qty)).toHaveValue('2');
+  await expect(blue.locator(qty)).toHaveValue('1');
+  await expect(page.getByTestId('cart-total-value')).toContainText(money(redAmount + second.price));
+  await info.attach('01-cart-before.png', { body: await page.getByRole('main').screenshot(), contentType: 'image/png' });
+
+  const remove = blue.getByRole('button', { name: /remove|delete/i })
+    .or(blue.getByRole('link', { name: /remove|delete/i }));
+  await expect(remove).toHaveCount(1);
+  await remove.click();
+  await expect(blue).toHaveCount(0);
+  await expect(page.getByTestId('cart-total-value')).toContainText(money(redAmount));
+  await page.reload();
+  await expect(productRows).toHaveCount(1);
+  await expect(red.locator(qty)).toHaveValue('2');
+  await expect(page.getByTestId('cart-total-value')).toContainText(money(redAmount));
   const saved = await cart(page.request);
   expect(saved.items).toHaveLength(1);
-  expect(saved.items[0]).toMatchObject({ variant_id: first.id, quantity: 2 });
+  expect(saved.items[0]).toMatchObject({ variant_id: first.id, quantity: 2, final_line_price: redAmount });
+  expect(saved.item_count).toBe(2);
+  expect(saved.total_price).toBe(redAmount);
+  await info.attach('02-cart-reloaded.png', { body: await page.getByRole('main').screenshot(), contentType: 'image/png' });
+
+  await page.getByRole('button', { name: /^check\s*out$/i }).click();
+  await expect(page).toHaveURL(/\/checkouts?\//);
+  const summaryRows = page.getByRole('row').filter({ visible: true });
+  const notebookRows = summaryRows.filter({ has: page.getByRole('cell', { name: /^QA Notebook\b/i }) });
+  const checkoutRed = notebookRows.filter({ has: page.getByRole('cell', { name: 'QA Notebook Red', exact: true }) });
+  await expect(notebookRows).toHaveCount(1);
+  await expect(checkoutRed.getByRole('cell', { name: '2', exact: true })).toHaveCount(1);
+  await expect(checkoutRed.getByRole('cell', { name: money(redAmount), exact: true })).toBeVisible();
+  const subtotal = summaryRows.filter({ has: page.getByRole('rowheader', { name: 'Subtotal', exact: true }) });
+  const subtotalCell = subtotal.getByRole('cell', { name: money(redAmount), exact: true });
+  await expect(subtotalCell).toBeVisible();
+  await info.attach('03-checkout-line.png', { body: await checkoutRed.screenshot(), contentType: 'image/png' });
+  await info.attach('04-checkout-subtotal.png', { body: await subtotal.screenshot(), contentType: 'image/png' });
+  await info.attach('cart-to-checkout.json', {
+    contentType: 'application/json',
+    body: JSON.stringify({ remainingVariantId: saved.items[0].variant_id,
+      quantity: saved.items[0].quantity, cartTotalCents: saved.total_price,
+      checkoutLine: await checkoutRed.innerText(), checkoutSubtotal: await subtotalCell.innerText() }, null, 2),
+  });
 });
 
 test('SH-04 モバイルでカートから青の商品に戻り、同じ色をもう1冊追加する', async ({ page }, info) => {
