@@ -277,7 +277,7 @@ test('一方の色を削除しても他方の数量が維持される', async ({
   expect(saved.items[0]).toMatchObject({ variant_id: first.id, quantity: 2 });
 });
 
-test('モバイル幅の商品ページから青を追加すると選んだ明細が保存される', async ({ page }) => {
+test('SH-04 モバイルでカートから青の商品に戻り、同じ色をもう1冊追加する', async ({ page }, info) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(root + 'products/qa-notebook?variant=' + second.id);
   const form = page.locator('form[action*="/cart/add"]').filter({
@@ -292,6 +292,61 @@ test('モバイル幅の商品ページから青を追加すると選んだ明�
   await page.goto(root + 'cart');
   await expect(page.locator('a[href*="/products/qa-notebook"]').filter({ visible: true }).first()).toBeVisible();
   await expect(page.getByText(/Blue/).filter({ visible: true }).first()).toBeVisible();
+
+  await page.goto(root + 'cart');
+  const cartForm = page.locator('#cart-form');
+  const productLink = cartForm.getByRole('link', { name: /QA Notebook/i })
+    .filter({ visible: true }).first();
+  await expect(productLink).toBeVisible();
+  await productLink.click();
+  await expect(page).toHaveURL(/\/products\/qa-notebook\/?(?:[?#].*)?$/);
+
+  // 色を選び直さず、戻った時点で購入フォームが青を指しているか確認する。
+  const main = page.getByRole('main');
+  const addButton = main.getByRole('button', { name: /add to cart/i })
+    .filter({ visible: true }).first();
+  const purchaseForm = main.locator('form').filter({ has: page.getByRole('button', { name: /add to cart/i }).filter({ visible: true }) });
+  await expect(purchaseForm).toHaveCount(1);
+  await expect(purchaseForm.locator('[name="id"]')).toHaveValue(String(second.id));
+  await info.attach('01-returned-product.png', {
+    body: await page.screenshot(), contentType: 'image/png',
+  });
+
+  const added = page.waitForResponse(response =>
+    response.request().method() === 'POST' &&
+    /\/cart\/add(?:\.js)?\/?$/.test(new URL(response.url()).pathname)
+  );
+  await addButton.click();
+  expect((await added).ok()).toBe(true);
+
+  await page.goto(root + 'cart');
+  await page.reload();
+  const finalCart = page.locator('#cart-form');
+  await expect(finalCart).toContainText('Blue');
+  const quantity = finalCart.locator('input[type="number"]:visible');
+  await expect(quantity).toHaveCount(1);
+  await expect(quantity).toHaveValue('2');
+
+  const finalState = await cart(page.request);
+  expect(finalState.items).toHaveLength(1);
+  expect(finalState.items[0]).toMatchObject({
+    variant_id: second.id, quantity: 2, final_line_price: second.price * 2,
+  });
+  expect(finalState.item_count).toBe(2);
+  expect(finalState.total_price).toBe(second.price * 2);
+
+  await info.attach('02-cart-after-return.png', {
+    body: await page.screenshot(), contentType: 'image/png',
+  });
+  await info.attach('cart-return-result.json', {
+    body: JSON.stringify({
+      variant_id: finalState.items[0].variant_id,
+      quantity: finalState.items[0].quantity,
+      line_price: finalState.items[0].final_line_price,
+      total_price: finalState.total_price,
+    }, null, 2),
+    contentType: 'application/json',
+  });
 });
 
 test('赤を別々に2回追加すると同じ明細に集約される', async ({ page }) => {
