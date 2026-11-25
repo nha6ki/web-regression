@@ -537,7 +537,7 @@ async function ensureGuestStreet(page: Page) {
   await expect(street, 'Shipping street must persist after leaving the field').toHaveValue(expected);
 }
 
-async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09' | 'sh12' | 'sh14') {
+async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09' | 'sh12' | 'sh14' | 'sh15') {
   await change(page.request, 'add', { items: [{ id: first.id, quantity: 2 }, { id: second.id, quantity: 1 }] });
   await page.goto(root + 'cart');
   await page.getByRole('button', { name: /^check\s*out$/i }).click();
@@ -548,12 +548,12 @@ async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09' 
   await country.selectOption('US');
   await input('firstName').fill('QA');
   await input('lastName').fill('Buyer');
-  if (scenario !== 'sh12' && scenario !== 'sh14') await input('address1').fill('1 Market Street');
+  if (scenario !== 'sh12' && scenario !== 'sh14' && scenario !== 'sh15') await input('address1').fill('1 Market Street');
   await input('city').fill('San Francisco');
   await page.locator('select[name="zone"]:visible').first().selectOption('CA');
   await input('postalCode').fill('94105');
   await input('postalCode').press('Tab');
-  if (scenario === 'sh12' || scenario === 'sh14') await ensureGuestStreet(page);
+  if (scenario === 'sh12' || scenario === 'sh14' || scenario === 'sh15') await ensureGuestStreet(page);
 }
 
 async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
@@ -661,7 +661,7 @@ async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false) {
 
 type OrderFixtures = Pick<import('@playwright/test').PlaywrightTestArgs & import('@playwright/test').PlaywrightWorkerArgs, 'page' | 'playwright'>;
 
-async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, scenario: 'sh07' | 'sh12' | 'sh14') {
+async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, scenario: 'sh07' | 'sh12' | 'sh14' | 'sh15') {
   const retryDecline = scenario === 'sh12';
   test.skip(process.env.SHOPIFY_TEST_ORDER !== '1', 'Opt in to creating one test order.');
   test.setTimeout(150_000);
@@ -755,7 +755,50 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       expect(money.currencyCode).toBe('USD');
       expect(Math.round(Number(money.amount) * 100), field).toBe(cents);
     }
-    if (scenario === 'sh14') {
+    if (scenario === 'sh15') {
+      await page.goto(root + 'cart');
+      const main = page.getByRole('main');
+      const rows = main.locator('#cart-form tr').filter({ has: page.locator('input[type="number"]:visible') });
+      await expect(main).toBeVisible();
+      await expect(rows).toHaveCount(0);
+      const empty = await cart(page.request);
+      expect(empty).toMatchObject({ items: [], item_count: 0, total_price: 0 });
+      await info.attach('01-after-purchase.png', { contentType: 'image/png', body: await main.screenshot() });
+
+      await page.goto(root + 'products/qa-notebook?variant=' + second.id);
+      const addButton = page.getByRole('button', { name: /add to cart/i }).filter({ visible: true });
+      const form = main.locator('form[action*="/cart/add"]').filter({ has: addButton });
+      await expect(form).toHaveCount(1);
+      await expect(form.locator('[name="id"]')).toHaveValue(String(second.id));
+      const [added] = await Promise.all([
+        page.waitForResponse(res => res.request().method() === 'POST' &&
+          new URL(res.url()).origin === new URL(root).origin && /\/cart\/add(?:\.js)?\/?$/.test(new URL(res.url()).pathname)),
+        form.getByRole('button', { name: /add to cart/i }).filter({ visible: true }).click(),
+      ]);
+      expect(added.ok()).toBe(true);
+      await page.goto(root + 'cart');
+      await expect(rows).toHaveCount(1);
+      await expect(rows).toContainText('Blue');
+      await expect(rows.locator('input[type="number"]:visible')).toHaveValue('1');
+      await expect(page.getByTestId('cart-total-value')).toHaveText('$' + (second.price / 100).toFixed(2) + ' USD');
+      const next = await cart(page.request);
+      expect(next).toMatchObject({ item_count: 1, total_price: second.price,
+        items: [{ variant_id: second.id, quantity: 1, final_line_price: second.price }] });
+      await info.attach('02-next-cart.png', { contentType: 'image/png', body: await main.screenshot() });
+
+      const again = (await orders(code)).filter(record => record.confirmationNumber === code);
+      expect(again).toHaveLength(1);
+      expect(again[0]).toEqual(order);
+      const publicOrder = (record: typeof order) => ({
+        status: record.displayFinancialStatus, test: record.test, items: record.lineItems.nodes,
+        subtotal: record.subtotalPriceSet.presentmentMoney, total: record.totalPriceSet.presentmentMoney,
+      });
+      await info.attach('post-purchase-cart.json', { contentType: 'application/json', body: JSON.stringify({
+        paidOrderBefore: publicOrder(order), clearedCart: { quantity: empty.item_count, totalCents: empty.total_price },
+        nextCart: { color: second.option1, quantity: next.item_count, totalCents: next.total_price },
+        paidOrderAfter: publicOrder(again[0]),
+      }, null, 2) });
+    } else if (scenario === 'sh14') {
       expect(approved).toEqual({ subtotal: 3000, shipping: 1500, tax: 0, total: 4500 });
       expect(order.shippingLines?.nodes).toEqual([{ title: 'Express' }]);
       await info.attach('express-order.json', { contentType: 'application/json', body: JSON.stringify({
@@ -1037,4 +1080,8 @@ test('SH-13 最後の赤を削除してカートを空にし、青だけでチ�
 
 test('SH-14 速達に変更して決済し、店舗の受注に保存された配送方法・送料・合計を照合する', async ({ page, playwright }, info) => {
   await verifyGuestOrder({ page, playwright }, info, 'sh14');
+});
+
+test('SH-15 購入完了後のカートで買い物を再開し、直前の支払済み注文と照合する', async ({ page, playwright }, info) => {
+  await verifyGuestOrder({ page, playwright }, info, 'sh15');
 });
