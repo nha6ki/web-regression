@@ -834,3 +834,55 @@ test('SH-10 チェックアウトから戻って赤を1冊減らし、再度チ�
   await info.attach('checkout-correction.json', { contentType: 'application/json',
     body: JSON.stringify({ before, correctedCartCents: saved.total_price, after }, null, 2) });
 });
+
+test('SH-11 片方のゲストが買い足した後も、別のゲストのカートには選んだ色と数量だけが残る', async ({ browser, page }, info) => {
+  const secondGuest = await browser.newContext({ storageState: state });
+  const quantity = 'input[type="number"]:visible';
+  const rows = (tab: Page) => tab.locator('#cart-form tr').filter({ has: tab.locator(quantity) });
+
+  async function check(tab: Page, variant: Variant, count: number) {
+    const lines = rows(tab);
+    await expect(lines).toHaveCount(1);
+    await expect(lines).toContainText(variant.option1);
+    await expect(lines.locator(quantity)).toHaveValue(String(count));
+    const total = tab.getByTestId('cart-total-value');
+    const cents = variant.price * count;
+    await expect(total).toHaveText('$' + (cents / 100).toFixed(2) + ' USD');
+    const stored = await cart(tab.request);
+    expect(stored.items).toHaveLength(1);
+    expect(stored.items[0]).toMatchObject({ variant_id: variant.id, quantity: count, final_line_price: cents });
+    expect(stored.item_count).toBe(count);
+    expect(stored.total_price).toBe(cents);
+    return { color: variant.option1, quantity: stored.items[0].quantity, totalCents: stored.total_price,
+      displayedTotal: await total.innerText() };
+  }
+
+  try {
+    const other = await secondGuest.newPage();
+    await change(page.request, 'add', { items: [{ id: first.id, quantity: 1 }] });
+    expect((await cart(other.request)).item_count).toBe(0);
+    await change(other.request, 'add', { items: [{ id: second.id, quantity: 1 }] });
+    await page.goto(root + 'cart');
+    await other.goto(root + 'cart');
+    const redBefore = await check(page, first, 1);
+    const blueBefore = await check(other, second, 1);
+    await info.attach('01-red-before.png', { contentType: 'image/png', body: await page.getByRole('main').screenshot() });
+    const red = rows(page);
+    const plus = red.getByRole('button', { name: /increase|increment|plus|^\+$/i })
+      .or(red.locator('button[name="plus"], button.quantity-plus, button.plus')).filter({ visible: true });
+    await plus.click();
+    await expect(red.locator(quantity)).toHaveValue('2');
+    await expect(page.getByTestId('cart-total-value')).toHaveText('$' + (first.price * 2 / 100).toFixed(2) + ' USD');
+    await page.reload();
+    const redAfter = await check(page, first, 2);
+    await info.attach('02-red-updated.png', { contentType: 'image/png', body: await page.getByRole('main').screenshot() });
+    await other.reload();
+    const blueAfter = await check(other, second, 1);
+    expect(blueAfter).toEqual(blueBefore);
+    await info.attach('03-blue-reloaded.png', { contentType: 'image/png', body: await other.getByRole('main').screenshot() });
+    await info.attach('guest-carts.json', { contentType: 'application/json',
+      body: JSON.stringify({ before: { guestA: redBefore, guestB: blueBefore }, afterReload: { guestA: redAfter, guestB: blueAfter } }, null, 2) });
+  } finally {
+    await secondGuest.close();
+  }
+});
