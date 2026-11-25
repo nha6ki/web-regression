@@ -537,7 +537,7 @@ async function ensureGuestStreet(page: Page) {
   await expect(street, 'Shipping street must persist after leaving the field').toHaveValue(expected);
 }
 
-async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09' | 'sh12') {
+async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09' | 'sh12' | 'sh14') {
   await change(page.request, 'add', { items: [{ id: first.id, quantity: 2 }, { id: second.id, quantity: 1 }] });
   await page.goto(root + 'cart');
   await page.getByRole('button', { name: /^check\s*out$/i }).click();
@@ -548,12 +548,12 @@ async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09' 
   await country.selectOption('US');
   await input('firstName').fill('QA');
   await input('lastName').fill('Buyer');
-  if (scenario !== 'sh12') await input('address1').fill('1 Market Street');
+  if (scenario !== 'sh12' && scenario !== 'sh14') await input('address1').fill('1 Market Street');
   await input('city').fill('San Francisco');
   await page.locator('select[name="zone"]:visible').first().selectOption('CA');
   await input('postalCode').fill('94105');
   await input('postalCode').press('Tab');
-  if (scenario === 'sh12') await ensureGuestStreet(page);
+  if (scenario === 'sh12' || scenario === 'sh14') await ensureGuestStreet(page);
 }
 
 async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
@@ -661,7 +661,8 @@ async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false) {
 
 type OrderFixtures = Pick<import('@playwright/test').PlaywrightTestArgs & import('@playwright/test').PlaywrightWorkerArgs, 'page' | 'playwright'>;
 
-async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, retryDecline: boolean) {
+async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, scenario: 'sh07' | 'sh12' | 'sh14') {
+  const retryDecline = scenario === 'sh12';
   test.skip(process.env.SHOPIFY_TEST_ORDER !== '1', 'Opt in to creating one test order.');
   test.setTimeout(150_000);
   const store = 'nha6ki-qa-lab.myshopify.com';
@@ -675,6 +676,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       data: { query: `query OrderCheck($q: String!) {
         orders(first: 2, query: $q) { nodes {
           name confirmationNumber test displayFinancialStatus
+          ${scenario === 'sh14' ? 'shippingLines(first: 2) { nodes { title } }' : ''}
           lineItems(first: 5) { nodes { title variantTitle quantity } }
           subtotalPriceSet { presentmentMoney { amount currencyCode } }
           totalShippingPriceSet { presentmentMoney { amount currencyCode } }
@@ -688,6 +690,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       const body = await response.json();
       if (body.errors?.length) throw new Error('Admin API: ' + body.errors[0].message);
       return body.data.orders.nodes as Array<{
+        shippingLines?: { nodes: Array<{ title: string }> };
         name: string; confirmationNumber: string; test: boolean; displayFinancialStatus: string;
         lineItems: { nodes: Array<{ title: string; variantTitle: string; quantity: number }> };
       } & Record<'subtotalPriceSet' | 'totalShippingPriceSet' | 'totalTaxSet' | 'totalPriceSet',
@@ -697,7 +700,23 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
 
   try {
     await orders('SH07PREFLIGHT');
-    await openGuestCheckout(page, retryDecline ? 'sh12' : 'sh07');
+    await openGuestCheckout(page, scenario);
+    if (scenario === 'sh14') {
+      const totalRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Total$/i }), visible: true });
+      const summary = page.getByRole('table').filter({ has: totalRow, visible: true });
+      const shippingRow = summary.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Shipping$/i }) });
+      for (const [method, shipping, total, image] of [
+        ['Standard', '$8.00', '$38.00', '01-standard.png'],
+        ['Express', '$15.00', '$45.00', '02-express.png'],
+      ] as const) {
+        const option = page.getByRole('radio', { name: new RegExp('\\b' + method + '\\b', 'i') });
+        await option.check({ timeout: 20000 });
+        await expect(option).toBeChecked();
+        await expect(shippingRow.getByRole('cell').last()).toHaveText(shipping, { useInnerText: true, timeout: 20000 });
+        await expect(totalRow).toContainText(total, { useInnerText: true, timeout: 20000 });
+        await info.attach(image, { contentType: 'image/png', body: await summary.screenshot() });
+      }
+    }
     let rejectedAmounts: Awaited<ReturnType<typeof payAtCheckout>> | undefined;
     if (retryDecline) {
       const checkoutBefore = new URL(page.url());
@@ -712,7 +731,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       const totalRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Total$/i }), visible: true });
       await info.attach('02-retry-total.png', { contentType: 'image/png', body: await totalRow.screenshot() });
     }
-    const approved = await payAtCheckout(page, '1', retryDecline);
+    const approved = await payAtCheckout(page, '1', scenario !== 'sh07');
     if (rejectedAmounts) expect(approved).toEqual(rejectedAmounts);
     const { subtotal, shipping, tax, total } = approved;
     const confirmation = page.getByText(/Confirmation\s*#\s*[A-Z\d]+/i).filter({ visible: true }).first();
@@ -736,7 +755,17 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       expect(money.currencyCode).toBe('USD');
       expect(Math.round(Number(money.amount) * 100), field).toBe(cents);
     }
-    if (retryDecline) {
+    if (scenario === 'sh14') {
+      expect(approved).toEqual({ subtotal: 3000, shipping: 1500, tax: 0, total: 4500 });
+      expect(order.shippingLines?.nodes).toEqual([{ title: 'Express' }]);
+      await info.attach('express-order.json', { contentType: 'application/json', body: JSON.stringify({
+        checkout: { method: 'Express', currency: 'USD', amountsInCents: approved },
+        order: { test: order.test, status: order.displayFinancialStatus, shippingLines: order.shippingLines?.nodes,
+          items: order.lineItems.nodes, subtotal: order.subtotalPriceSet.presentmentMoney,
+          shipping: order.totalShippingPriceSet.presentmentMoney, tax: order.totalTaxSet.presentmentMoney,
+          total: order.totalPriceSet.presentmentMoney },
+      }, null, 2) });
+    } else if (retryDecline) {
       await info.attach('payment-recovery.json', { contentType: 'application/json', body: JSON.stringify({
         currency: 'USD', declinedCheckoutCents: rejectedAmounts, approvedCheckoutCents: approved,
         order: { test: order.test, financialStatus: order.displayFinancialStatus, lines: order.lineItems.nodes,
@@ -750,7 +779,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
 }
 
 test('SH-07 ゲストのテスト決済を店舗の受注と照合する', async ({ page, playwright }, info) => {
-  await verifyGuestOrder({ page, playwright }, info, false);
+  await verifyGuestOrder({ page, playwright }, info, 'sh07');
 });
 
 test('SH-08 決済を拒否された後も商品と小計が保持され、支払いボタンが再び操作できる', async ({ page }, info) => {
@@ -942,7 +971,7 @@ test('SH-11 片方のゲストが買い足した後も、別のゲストのカ�
 });
 
 test('SH-12 決済拒否後に同じチェックアウトで再決済し、店舗の支払済み注文と照合する', async ({ page, playwright }, info) => {
-  await verifyGuestOrder({ page, playwright }, info, true);
+  await verifyGuestOrder({ page, playwright }, info, 'sh12');
 });
 
 test('SH-13 最後の赤を削除してカートを空にし、青だけでチェックアウトを開始する', async ({ page }, info) => {
@@ -1004,4 +1033,8 @@ test('SH-13 最後の赤を削除してカートを空にし、青だけでチ�
     body: JSON.stringify({ emptyAfterReload: { items: empty.items, quantity: empty.item_count, totalCents: empty.total_price },
       rebuiltCart: { variantId: saved.items[0].variant_id, color: second.option1, quantity: saved.item_count, totalCents: saved.total_price },
       checkout: { lineCount: 1, color: second.option1, quantity: 1, subtotal: await subtotal.innerText() } }, null, 2) });
+});
+
+test('SH-14 速達に変更して決済し、店舗の受注に保存された配送方法・送料・合計を照合する', async ({ page, playwright }, info) => {
+  await verifyGuestOrder({ page, playwright }, info, 'sh14');
 });
