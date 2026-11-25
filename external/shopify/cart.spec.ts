@@ -396,15 +396,50 @@ test('SH-04 モバイルでカートから青の商品に戻り、同じ色を�
   });
 });
 
-test('赤を別々に2回追加すると同じ明細に集約される', async ({ page }) => {
-  for (let added = 1; added <= 2; added++) {
-    await change(page.request, 'add', { items: [{ id: first.id, quantity: 1 }] });
+test('SH-05 赤を2回追加したあと、カートで1冊に訂正して再読み込みする', async ({ page }, info) => {
+  const quantity = 'input[type="number"]:visible';
+  const rows = page.locator('#cart-form tr').filter({ has: page.locator(quantity) });
+  const red = rows.filter({ hasText: 'Red' });
+  const total = page.getByTestId('cart-total-value');
+
+  async function checkCart(count: number) {
+    const cents = first.price * count;
+    const display = '$' + (cents / 100).toFixed(2) + ' USD';
+    await expect(rows).toHaveCount(1);
+    await expect(red.locator(quantity)).toHaveValue(String(count));
+    await expect(total).toHaveText(display);
     const saved = await cart(page.request);
-    expect(saved.items).toMatchObject([
-      { variant_id: first.id, quantity: added, final_line_price: first.price * added },
-    ]);
-    expect(saved.total_price).toBe(first.price * added);
+    expect(saved.items).toHaveLength(1);
+    const [item] = saved.items;
+    expect(item).toMatchObject({ variant_id: first.id, quantity: count, final_line_price: cents });
+    expect(saved.item_count).toBe(count);
+    expect(saved.total_price).toBe(cents);
+    return {
+      variantId: item.variant_id, color: first.option1, quantity: item.quantity,
+      lineCents: item.final_line_price, totalCents: saved.total_price, displayedTotal: await total.innerText(),
+    };
   }
+
+  const addOne = () => change(page.request, 'add', { items: [{ id: first.id, quantity: 1 }] });
+  await addOne();
+  await page.goto(root + 'cart');
+  const firstAddition = await checkCart(1);
+  await addOne();
+  await page.reload();
+  const beforeCorrection = await checkCart(2);
+  await info.attach('01-merged-cart.png', { body: await page.getByRole('main').screenshot(), contentType: 'image/png' });
+
+  const decrease = red.getByRole('button', { name: /decrease|decrement|minus|^[−–-]$/i })
+    .or(red.locator('button[name="minus"], button.quantity-minus, button.minus')).filter({ visible: true });
+  await expect(decrease).toHaveCount(1);
+  await decrease.click();
+  await expect(total).toHaveText('$' + (first.price / 100).toFixed(2) + ' USD');
+  await page.reload();
+  const afterReload = await checkCart(1);
+  await info.attach('02-corrected-cart.png', { body: await page.getByRole('main').screenshot(), contentType: 'image/png' });
+  await info.attach('quantity-correction.json', {
+    contentType: 'application/json', body: JSON.stringify({ firstAddition, beforeCorrection, afterReload }, null, 2),
+  });
 });
 
 test('SH-06 別タブで赤を買い足し、元のタブを再読み込みして色別の冊数と合計を照合する', async ({ page, context }, info) => {
