@@ -944,3 +944,64 @@ test('SH-11 片方のゲストが買い足した後も、別のゲストのカ�
 test('SH-12 決済拒否後に同じチェックアウトで再決済し、店舗の支払済み注文と照合する', async ({ page, playwright }, info) => {
   await verifyGuestOrder({ page, playwright }, info, true);
 });
+
+test('SH-13 最後の赤を削除してカートを空にし、青だけでチェックアウトを開始する', async ({ page }, info) => {
+  const main = page.getByRole('main');
+  const cartRows = main.locator('#cart-form tr').filter({ has: page.locator('input[type="number"]:visible') });
+  await change(page.request, 'add', { items: [{ id: first.id, quantity: 1 }] });
+  await page.goto(root + 'cart');
+  await expect(cartRows).toHaveCount(1);
+  await expect(cartRows).toContainText(first.option1);
+  await expect(cartRows.locator('input[type="number"]:visible')).toHaveValue('1');
+  await info.attach('01-last-red.png', { contentType: 'image/png', body: await main.screenshot() });
+  const remove = cartRows.getByRole('button', { name: /remove|delete/i })
+    .or(cartRows.getByRole('link', { name: /remove|delete/i }));
+  await remove.click();
+  await expect(cartRows).toHaveCount(0);
+  await page.reload();
+  await expect(main).toBeVisible();
+  await expect(main.getByRole('button', { name: /^check\s*out$/i })).toBeHidden();
+  await expect(cartRows).toHaveCount(0);
+  const empty = await cart(page.request);
+  expect(empty).toMatchObject({ items: [], item_count: 0, total_price: 0 });
+  await info.attach('02-empty-reloaded.png', { contentType: 'image/png', body: await main.screenshot() });
+
+  await page.goto(root + 'products/qa-notebook?variant=' + second.id);
+  const visibleAdd = page.getByRole('button', { name: /add to cart/i }).filter({ visible: true });
+  const form = main.locator('form[action*="/cart/add"]').filter({ has: visibleAdd });
+  await expect(form).toHaveCount(1);
+  await expect(form.locator('[name="id"]')).toHaveValue(String(second.id));
+  const add = form.getByRole('button', { name: /add to cart/i }).filter({ visible: true });
+  const [added] = await Promise.all([
+    page.waitForResponse(res => res.request().method() === 'POST' &&
+      new URL(res.url()).origin === new URL(root).origin && /\/cart\/add(?:\.js)?\/?$/.test(new URL(res.url()).pathname)),
+    add.click(),
+  ]);
+  expect(added.ok()).toBe(true);
+  await page.goto(root + 'cart');
+  await expect(cartRows).toHaveCount(1);
+  await expect(cartRows).toContainText(second.option1);
+  await expect(cartRows.locator('input[type="number"]:visible')).toHaveValue('1');
+  const saved = await cart(page.request);
+  expect(saved.items).toHaveLength(1);
+  expect(saved.items[0]).toMatchObject({ variant_id: second.id, quantity: 1, final_line_price: second.price });
+  expect(saved.item_count).toBe(1);
+  expect(saved.total_price).toBe(second.price);
+
+  await main.getByRole('button', { name: /^check\s*out$/i }).click();
+  await expect(page).toHaveURL(/\/checkouts?\//);
+  const rows = page.getByRole('row').filter({ visible: true });
+  const blue = rows.filter({ has: page.getByRole('cell', { name: 'QA Notebook Blue', exact: true }) });
+  const products = page.getByRole('table').filter({ has: blue });
+  await expect(products.getByRole('row').filter({ has: page.getByRole('cell') })).toHaveCount(1);
+  await expect(blue.getByRole('cell', { name: '1', exact: true })).toHaveCount(1);
+  const money = '$' + (second.price / 100).toFixed(2);
+  await expect(blue.getByRole('cell', { name: money, exact: true })).toBeVisible();
+  const subtotal = rows.filter({ has: page.getByRole('rowheader', { name: /^Subtotal\b/i }) }).getByRole('cell').last();
+  await expect(subtotal).toHaveText(money, { useInnerText: true });
+  await info.attach('03-blue-checkout.png', { contentType: 'image/png', body: await products.screenshot() });
+  await info.attach('empty-to-checkout.json', { contentType: 'application/json',
+    body: JSON.stringify({ emptyAfterReload: { items: empty.items, quantity: empty.item_count, totalCents: empty.total_price },
+      rebuiltCart: { variantId: saved.items[0].variant_id, color: second.option1, quantity: saved.item_count, totalCents: saved.total_price },
+      checkout: { lineCount: 1, color: second.option1, quantity: 1, subtotal: await subtotal.innerText() } }, null, 2) });
+});
