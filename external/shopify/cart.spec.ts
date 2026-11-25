@@ -1,4 +1,4 @@
-import { type Page, test, expect, type BrowserContext, type Frame, type Locator, type APIRequestContext } from '@playwright/test';
+import { type Page, test, expect, type BrowserContext, type Frame, type Locator, type TestInfo, type APIRequestContext } from '@playwright/test';
 
 type Variant = { id: number; price: number; available: boolean; option1: string };
 type CartItem = { variant_id: number; key: string; quantity: number; final_line_price: number };
@@ -519,7 +519,25 @@ test('SH-06 別タブで赤を買い足し、元のタブを再読み込みし�
   }
 });
 
-async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09') {
+function shippingStreet(page: Page) {
+  return page.locator('input[name="address1"]:visible').first();
+}
+
+async function ensureGuestStreet(page: Page) {
+  const street = shippingStreet(page);
+  const expected = '1 Market Street';
+  await expect(street, 'Shipping street field').toBeVisible();
+  // Region changes can replace the input. Re-enter the fixture in the current field.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (await street.inputValue() === expected) break;
+    await street.fill(expected);
+    await street.press('Escape');
+    await street.press('Tab');
+  }
+  await expect(street, 'Shipping street must persist after leaving the field').toHaveValue(expected);
+}
+
+async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09' | 'sh12') {
   await change(page.request, 'add', { items: [{ id: first.id, quantity: 2 }, { id: second.id, quantity: 1 }] });
   await page.goto(root + 'cart');
   await page.getByRole('button', { name: /^check\s*out$/i }).click();
@@ -530,18 +548,22 @@ async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09')
   await country.selectOption('US');
   await input('firstName').fill('QA');
   await input('lastName').fill('Buyer');
-  await input('address1').fill('1 Market Street');
+  if (scenario !== 'sh12') await input('address1').fill('1 Market Street');
   await input('city').fill('San Francisco');
   await page.locator('select[name="zone"]:visible').first().selectOption('CA');
   await input('postalCode').fill('94105');
   await input('postalCode').press('Tab');
+  if (scenario === 'sh12') await ensureGuestStreet(page);
 }
 
 async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
   await openGuestCheckout(page, scenario);
-  const gatewayHint = scenario === 'sh07' ? /to simulate an approved transaction/i : /to simulate a declined transaction/i;
+  return payAtCheckout(page, scenario === 'sh07' ? '1' : '2');
+}
+
+async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false) {
+  const gatewayHint = card === '1' ? /to simulate an approved transaction/i : /to simulate a declined transaction/i;
   await expect(page.getByText(gatewayHint)).toBeVisible();
-  const card = scenario === 'sh07' ? '1' : '2';
   async function paymentInput(label: RegExp, selector: string) {
     const inDocument = (scope: Frame) =>
       scope.locator(selector).or(scope.getByRole('textbox', { name: label }))
@@ -620,6 +642,7 @@ async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
       name: 'QA Notebook ' + variant.option1, exact: true }), visible: true });
     await expect(line.getByRole('cell', { name: String(count), exact: true })).toHaveCount(1);
   }
+  if (checkStreet) await ensureGuestStreet(page);
   const shipping = await amount(/^Shipping$/i);
   const subtotal = await amount(/^Subtotal/i);
   const tax = await row(/tax/i).count() ? await amount(/tax/i) : 0;
@@ -631,11 +654,14 @@ async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
   for (const field of fields) {
     await expect(await paymentInput(field.label, field.selector)).toHaveValue(field.expected);
   }
+  if (checkStreet) await expect(shippingStreet(page), 'Shipping street immediately before payment').toHaveValue('1 Market Street');
   await page.getByRole('button', { name: /^(?:pay now|complete order)(?:\s+\$\s*[\d,]+\.\d{2})?$/i }).click({ timeout: 15000 });
   return { subtotal, shipping, tax, total };
 }
 
-test('SH-07 ゲストのテスト決済を店舗の受注と照合する', async ({ page, playwright }, info) => {
+type OrderFixtures = Pick<import('@playwright/test').PlaywrightTestArgs & import('@playwright/test').PlaywrightWorkerArgs, 'page' | 'playwright'>;
+
+async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, retryDecline: boolean) {
   test.skip(process.env.SHOPIFY_TEST_ORDER !== '1', 'Opt in to creating one test order.');
   test.setTimeout(150_000);
   const store = 'nha6ki-qa-lab.myshopify.com';
@@ -671,7 +697,24 @@ test('SH-07 ゲストのテスト決済を店舗の受注と照合する', async
 
   try {
     await orders('SH07PREFLIGHT');
-    const { subtotal, shipping, tax, total } = await submitGuestTestPayment(page, 'sh07');
+    await openGuestCheckout(page, retryDecline ? 'sh12' : 'sh07');
+    let rejectedAmounts: Awaited<ReturnType<typeof payAtCheckout>> | undefined;
+    if (retryDecline) {
+      const checkoutBefore = new URL(page.url());
+      rejectedAmounts = await payAtCheckout(page, '2', true);
+      const rejection = page.getByText('There was an issue processing your payment. Try again or use a different payment method.', { exact: true }).filter({ visible: true });
+      await expect(rejection).toBeVisible({ timeout: 30000 });
+      const checkoutAfter = new URL(page.url());
+      expect(checkoutAfter.origin).toBe(checkoutBefore.origin);
+      const checkoutPath = (url: URL) => url.pathname.replace(/\/$/, '');
+      expect(checkoutPath(checkoutAfter)).toBe(checkoutPath(checkoutBefore));
+      await info.attach('01-rejection.png', { contentType: 'image/png', body: await rejection.screenshot() });
+      const totalRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Total$/i }), visible: true });
+      await info.attach('02-retry-total.png', { contentType: 'image/png', body: await totalRow.screenshot() });
+    }
+    const approved = await payAtCheckout(page, '1', retryDecline);
+    if (rejectedAmounts) expect(approved).toEqual(rejectedAmounts);
+    const { subtotal, shipping, tax, total } = approved;
     const confirmation = page.getByText(/Confirmation\s*#\s*[A-Z\d]+/i).filter({ visible: true }).first();
     await expect(confirmation).toBeVisible({ timeout: 25000 });
     const code = (await confirmation.innerText()).match(/Confirmation\s*#\s*([A-Z\d]+)/i)![1];
@@ -693,10 +736,21 @@ test('SH-07 ゲストのテスト決済を店舗の受注と照合する', async
       expect(money.currencyCode).toBe('USD');
       expect(Math.round(Number(money.amount) * 100), field).toBe(cents);
     }
-    await info.attach('order-comparison.json', { contentType: 'application/json',
+    if (retryDecline) {
+      await info.attach('payment-recovery.json', { contentType: 'application/json', body: JSON.stringify({
+        currency: 'USD', declinedCheckoutCents: rejectedAmounts, approvedCheckoutCents: approved,
+        order: { test: order.test, financialStatus: order.displayFinancialStatus, lines: order.lineItems.nodes,
+          subtotal: order.subtotalPriceSet.presentmentMoney, shipping: order.totalShippingPriceSet.presentmentMoney,
+          tax: order.totalTaxSet.presentmentMoney, total: order.totalPriceSet.presentmentMoney },
+      }, null, 2) });
+    } else await info.attach('order-comparison.json', { contentType: 'application/json',
       body: JSON.stringify({ order: order.name, red: 2, blue: 1, currency: 'USD',
         subtotalCents: subtotal, shippingCents: shipping, taxCents: tax, totalCents: total, testOrder: true }, null, 2) });
   } finally { await admin.dispose(); }
+}
+
+test('SH-07 ゲストのテスト決済を店舗の受注と照合する', async ({ page, playwright }, info) => {
+  await verifyGuestOrder({ page, playwright }, info, false);
 });
 
 test('SH-08 決済を拒否された後も商品と小計が保持され、支払いボタンが再び操作できる', async ({ page }, info) => {
@@ -885,4 +939,8 @@ test('SH-11 片方のゲストが買い足した後も、別のゲストのカ�
   } finally {
     await secondGuest.close();
   }
+});
+
+test('SH-12 決済拒否後に同じチェックアウトで再決済し、店舗の支払済み注文と照合する', async ({ page, playwright }, info) => {
+  await verifyGuestOrder({ page, playwright }, info, true);
 });
