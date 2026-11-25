@@ -778,3 +778,59 @@ test('SH-09 配送方法を標準から速達に変更し、標準に戻すと�
     contentType: 'application/json', body: JSON.stringify({ initial, expedited, restored }, null, 2),
   });
 });
+
+test('SH-10 チェックアウトから戻って赤を1冊減らし、再度チェックアウトして明細と小計を照合する', async ({ page }, info) => {
+  const money = (cents: number) => '$' + (cents / 100).toFixed(2);
+  const main = page.getByRole('main');
+  await change(page.request, 'add', { items: [{ id: first.id, quantity: 2 }, { id: second.id, quantity: 1 }] });
+  await page.goto(root + 'cart');
+
+  async function enterCheckout(redCount: number, image: string) {
+    await main.getByRole('button', { name: /^check\s*out$/i }).click();
+    await expect(page).toHaveURL(/\/checkouts?\//);
+    const rows = page.getByRole('row').filter({ visible: true });
+    const products = rows.filter({ has: page.getByRole('cell', { name: /^QA Notebook\b/ }) });
+    await expect(products).toHaveCount(2);
+    const observed = [];
+    for (const [variant, count] of [[first, redCount], [second, 1]] as const) {
+      const row = products.filter({ has: page.getByRole('cell', { name: 'QA Notebook ' + variant.option1, exact: true }) });
+      const qty = row.getByRole('cell', { name: String(count), exact: true });
+      await expect(qty).toHaveCount(1);
+      const amount = row.getByRole('cell', { name: money(variant.price * count), exact: true });
+      await expect(amount).toBeVisible();
+      observed.push({ color: variant.option1, quantity: Number((await qty.textContent())?.trim()), amount: await amount.innerText() });
+      expect(observed[observed.length - 1].quantity).toBe(count);
+    }
+    const subtotal = rows.filter({ has: page.getByRole('rowheader', { name: /^Subtotal\b/i }) }).getByRole('cell').last();
+    await expect(subtotal).toHaveText(money(first.price * redCount + second.price), { useInnerText: true });
+    await info.attach(image, { contentType: 'image/png', body: await page.getByRole('table').filter({ has: products.first() }).screenshot() });
+    return { lines: observed, subtotal: await subtotal.innerText() };
+  }
+
+  expect([first.price, second.price], "QA Notebook fixture prices in cents").toEqual([1000, 1000]);
+  const before = await enterCheckout(2, '01-first-checkout.png');
+  await page.goBack();
+  await expect(page).toHaveURL(/\/cart\/?(?:[?#].*)?$/);
+  const cartRows = page.locator('#cart-form tr').filter({ has: page.locator('input[type="number"]:visible') });
+  const red = cartRows.filter({ hasText: 'Red' });
+  const minus = red.getByRole('button', { name: /decrease|decrement|minus|^[−–-]$/i })
+    .or(red.locator('button[name="minus"], button.quantity-minus, button.minus')).filter({ visible: true });
+  await expect(red.locator('input[type="number"]:visible')).toHaveValue('2');
+  await minus.click();
+  await expect(cartRows).toHaveCount(2);
+  for (const color of ['Red', 'Blue']) {
+    await expect(cartRows.filter({ hasText: color }).locator('input[type="number"]:visible')).toHaveValue('1');
+  }
+  await expect(page.getByTestId('cart-total-value')).toHaveText(money(first.price + second.price) + ' USD');
+  const saved = await cart(page.request);
+  expect(saved.item_count).toBe(2);
+  expect(saved.total_price).toBe(first.price + second.price);
+  expect(saved.items).toHaveLength(2);
+  for (const variant of [first, second]) {
+    expect(saved.items.find(item => item.variant_id === variant.id)).toMatchObject({ quantity: 1, final_line_price: variant.price });
+  }
+  await info.attach('02-corrected-cart.png', { contentType: 'image/png', body: await main.screenshot() });
+  const after = await enterCheckout(1, '03-returned-checkout.png');
+  await info.attach('checkout-correction.json', { contentType: 'application/json',
+    body: JSON.stringify({ before, correctedCartCents: saved.total_price, after }, null, 2) });
+});
