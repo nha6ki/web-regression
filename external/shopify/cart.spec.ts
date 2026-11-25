@@ -1216,3 +1216,83 @@ test('SH-18 セット購入リンクの色・冊数と小計をカートとチ�
     checkout: { items: checkout, subtotal: (await amount.innerText()).trim() },
   }, null, 2) });
 });
+
+test('SH-19 同じ青ノートの名入れ別に冊数を変更し、チェックアウトまで照合する', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(second.price).toBe(1000);
+  const labels = ['ALPHA', 'BRAVO'] as const;
+  const money = (cents: number) => '$' + (cents / 100).toFixed(2);
+  for (const label of labels) {
+    await change(page.request, 'add', { items: [{
+      id: second.id, quantity: 1, properties: { Engraving: label },
+    }] });
+  }
+  async function snapshot(alphaQuantity: number) {
+    const saved = await cart(page.request);
+    expect(saved.items).toHaveLength(2);
+    expect(new Set(saved.items.map(item => item.key)).size).toBe(2);
+    expect(saved.item_count).toBe(alphaQuantity + 1);
+    expect(saved.total_price).toBe(second.price * (alphaQuantity + 1));
+    const items = labels.map(label => {
+      const matches = saved.items.filter((item: CartItem & { properties?: { Engraving?: string } }) =>
+        item.properties?.Engraving === label);
+      expect(matches).toHaveLength(1);
+      const item = matches[0];
+      const quantity = label === 'ALPHA' ? alphaQuantity : 1;
+      expect(item).toMatchObject({ variant_id: second.id, quantity, final_line_price: second.price * quantity });
+      return { engraving: label, variantId: item.variant_id, quantity: item.quantity, lineCents: item.final_line_price };
+    });
+    return { items, totalCents: saved.total_price };
+  }
+
+  await page.goto(root + 'cart');
+  const main = page.getByRole('main');
+  const rows = main.locator('#cart-form tr').filter({ has: page.locator('input[type="number"]:visible') });
+  const cartLine = (label: string) => rows.filter({ hasText: label });
+  async function verifyCart(alphaQuantity: number) {
+    await expect(rows).toHaveCount(2);
+    for (const label of labels) {
+      const line = cartLine(label);
+      await expect(line).toHaveCount(1);
+      await expect(line).toContainText(/Blue/i);
+      const quantity = label === 'ALPHA' ? alphaQuantity : 1;
+      await expect(line.locator('input[type="number"]:visible')).toHaveValue(String(quantity));
+    }
+    await expect(main.getByTestId('cart-total-value')).toContainText(money((alphaQuantity + 1) * second.price));
+  }
+  await verifyCart(1);
+  const before = await snapshot(1);
+  await info.attach('01-personalized-cart.png', { body: await main.screenshot(), contentType: 'image/png' });
+  const alpha = cartLine('ALPHA');
+  await alpha.locator('button[name="plus"], button.quantity-plus')
+    .or(alpha.getByRole('button', { name: /increase|increment|add one/i })).filter({ visible: true }).click();
+  await verifyCart(2);
+  await page.reload();
+  await verifyCart(2);
+  const afterReload = await snapshot(2);
+  await info.attach('02-updated-cart.png', { body: await main.screenshot(), contentType: 'image/png' });
+
+  await main.getByRole('button', { name: /^check\s*out$/i }).click();
+  await expect(page).toHaveURL(/\/checkouts?\//);
+  const lines = page.getByRole('row').filter({ hasText: 'QA Notebook', visible: true });
+  await expect(lines).toHaveCount(2);
+  const checkoutItems = [];
+  for (const item of afterReload.items) {
+    const line = lines.filter({ hasText: item.engraving });
+    await expect(line).toHaveCount(1);
+    await expect(line).toContainText(/Blue/i);
+    const quantityCell = line.getByRole('cell', { name: String(item.quantity), exact: true });
+    const amountCell = line.getByRole('cell', { name: money(item.lineCents), exact: true });
+    await expect(quantityCell).toHaveCount(1);
+    await expect(amountCell).toBeVisible();
+    checkoutItems.push({ engraving: item.engraving, quantity: (await quantityCell.textContent())?.trim(), amount: (await amountCell.innerText()).trim() });
+  }
+  const subtotal = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Subtotal\b/i }), visible: true });
+  const amount = subtotal.getByRole('cell', { name: money(afterReload.totalCents), exact: true });
+  await expect(amount).toBeVisible();
+  const products = page.getByRole('table').filter({ has: lines.first(), visible: true });
+  await info.attach('03-checkout-items.png', { body: await products.screenshot(), contentType: 'image/png' });
+  await info.attach('engraving-comparison.json', { contentType: 'application/json', body: JSON.stringify({
+    currency: 'USD', before, afterReload, checkoutItems, checkoutSubtotal: (await amount.innerText()).trim(),
+  }, null, 2) });
+});
