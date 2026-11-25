@@ -661,8 +661,8 @@ async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false) {
 
 type OrderFixtures = Pick<import('@playwright/test').PlaywrightTestArgs & import('@playwright/test').PlaywrightWorkerArgs, 'page' | 'playwright'>;
 
-async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, scenario: 'sh07' | 'sh12' | 'sh14' | 'sh15') {
-  const retryDecline = scenario === 'sh12';
+async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, scenario: 'sh07' | 'sh12' | 'sh14' | 'sh15' | 'sh16') {
+  const retryDecline = scenario === 'sh12' || scenario === 'sh16';
   test.skip(process.env.SHOPIFY_TEST_ORDER !== '1', 'Opt in to creating one test order.');
   test.setTimeout(150_000);
   const store = 'nha6ki-qa-lab.myshopify.com';
@@ -676,7 +676,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       data: { query: `query OrderCheck($q: String!) {
         orders(first: 2, query: $q) { nodes {
           name confirmationNumber test displayFinancialStatus
-          ${scenario === 'sh14' ? 'shippingLines(first: 2) { nodes { title } }' : ''}
+          ${scenario === 'sh14' || scenario === 'sh16' ? 'shippingLines(first: 2) { nodes { title } }' : ''}
           lineItems(first: 5) { nodes { title variantTitle quantity } }
           subtotalPriceSet { presentmentMoney { amount currencyCode } }
           totalShippingPriceSet { presentmentMoney { amount currencyCode } }
@@ -700,7 +700,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
 
   try {
     await orders('SH07PREFLIGHT');
-    await openGuestCheckout(page, scenario);
+    await openGuestCheckout(page, scenario === 'sh16' ? 'sh12' : scenario);
     if (scenario === 'sh14') {
       const totalRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Total$/i }), visible: true });
       const summary = page.getByRole('table').filter({ has: totalRow, visible: true });
@@ -731,8 +731,23 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       const totalRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Total$/i }), visible: true });
       await info.attach('02-retry-total.png', { contentType: 'image/png', body: await totalRow.screenshot() });
     }
+    if (scenario === 'sh16') {
+      expect(rejectedAmounts).toEqual({ subtotal: 3000, shipping: 800, tax: 0, total: 3800 });
+      const standard = page.getByRole('radio', { name: /\bStandard\b/i });
+      const express = page.getByRole('radio', { name: /\bExpress\b/i });
+      await expect(standard).toBeChecked();
+      await express.check();
+      await expect(express).toBeChecked();
+      const totalRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Total$/i }), visible: true });
+      const summary = page.getByRole('table').filter({ has: totalRow, visible: true });
+      const shippingRow = summary.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Shipping$/i }) });
+      await expect(shippingRow.getByRole('cell').last()).toHaveText('$15.00', { useInnerText: true, timeout: 20000 });
+      await expect(totalRow.getByRole('cell').last()).toContainText('$45.00', { useInnerText: true, timeout: 20000 });
+      await info.attach('03-express.png', { contentType: 'image/png', body: await summary.screenshot() });
+    }
     const approved = await payAtCheckout(page, '1', scenario !== 'sh07');
-    if (rejectedAmounts) expect(approved).toEqual(rejectedAmounts);
+    if (scenario === 'sh16') expect(approved).toEqual({ subtotal: 3000, shipping: 1500, tax: 0, total: 4500 });
+    else if (rejectedAmounts) expect(approved).toEqual(rejectedAmounts);
     const { subtotal, shipping, tax, total } = approved;
     const confirmation = page.getByText(/Confirmation\s*#\s*[A-Z\d]+/i).filter({ visible: true }).first();
     await expect(confirmation).toBeVisible({ timeout: 25000 });
@@ -755,7 +770,15 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       expect(money.currencyCode).toBe('USD');
       expect(Math.round(Number(money.amount) * 100), field).toBe(cents);
     }
-    if (scenario === 'sh15') {
+    if (scenario === 'sh16') {
+      expect(order.shippingLines?.nodes).toEqual([{ title: 'Express' }]);
+      await info.attach('shipping-recovery.json', { contentType: 'application/json', body: JSON.stringify({
+        currency: 'USD', amountsInCents: { declinedStandard: rejectedAmounts, approvedExpress: approved },
+        order: { test: order.test, status: order.displayFinancialStatus, shippingMethod: order.shippingLines?.nodes[0].title,
+          items: order.lineItems.nodes, shipping: order.totalShippingPriceSet.presentmentMoney,
+          total: order.totalPriceSet.presentmentMoney },
+      }, null, 2) });
+    } else if (scenario === 'sh15') {
       await page.goto(root + 'cart');
       const main = page.getByRole('main');
       const rows = main.locator('#cart-form tr').filter({ has: page.locator('input[type="number"]:visible') });
@@ -1084,4 +1107,8 @@ test('SH-14 速達に変更して決済し、店舗の受注に保存された�
 
 test('SH-15 購入完了後のカートで買い物を再開し、直前の支払済み注文と照合する', async ({ page, playwright }, info) => {
   await verifyGuestOrder({ page, playwright }, info, 'sh15');
+});
+
+test('SH-16 決済拒否後に速達へ変更し、再決済した注文の送料を照合', async ({ page, playwright }, info) => {
+  await verifyGuestOrder({ page, playwright }, info, 'sh16');
 });
