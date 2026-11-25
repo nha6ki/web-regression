@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Frame, type Locator, type APIRequestContext } from '@playwright/test';
+import { type Page, test, expect, type BrowserContext, type Frame, type Locator, type APIRequestContext } from '@playwright/test';
 
 type Variant = { id: number; price: number; available: boolean; option1: string };
 type CartItem = { variant_id: number; key: string; quantity: number; final_line_price: number };
@@ -519,6 +519,119 @@ test('SH-06 別タブで赤を買い足し、元のタブを再読み込みし�
   }
 });
 
+async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
+  await change(page.request, 'add', { items: [{ id: first.id, quantity: 2 }, { id: second.id, quantity: 1 }] });
+  await page.goto(root + 'cart');
+  await page.getByRole('button', { name: /^check\s*out$/i }).click();
+  await expect(page).toHaveURL(/\/checkouts?\//);
+  const input = (name: string) => page.locator('input[name="' + name + '"]:visible').first();
+  await input('email').fill(scenario + '-' + Date.now() + '@example.com');
+  const country = page.locator('select[name="countryCode"]:visible').first();
+  await country.selectOption('US');
+  await input('firstName').fill('QA');
+  await input('lastName').fill('Buyer');
+  await input('address1').fill('1 Market Street');
+  await input('city').fill('San Francisco');
+  await page.locator('select[name="zone"]:visible').first().selectOption('CA');
+  await input('postalCode').fill('94105');
+  await input('postalCode').press('Tab');
+
+  const gatewayHint = scenario === 'sh07' ? /to simulate an approved transaction/i : /to simulate a declined transaction/i;
+  await expect(page.getByText(gatewayHint)).toBeVisible();
+  const card = scenario === 'sh07' ? '1' : '2';
+  async function paymentInput(label: RegExp, selector: string) {
+    const inDocument = (scope: Frame) =>
+      scope.locator(selector).or(scope.getByRole('textbox', { name: label }))
+        .and(scope.locator('input:visible'));
+    async function candidates() {
+      const found: Locator[] = [];
+      for (const frame of page.frames()) {
+        if (frame !== page.mainFrame()) {
+          if (frame.isDetached()) continue;
+          const host = await frame.frameElement();
+          try {
+            if (!await host.isVisible() || !label.test(await host.getAttribute('title') || '')) continue;
+          } finally { await host.dispose(); }
+        }
+        found.push(...await inDocument(frame).all());
+      }
+      return found;
+    }
+    let matches: Locator[] = [];
+    await expect.poll(async () => {
+      matches = await candidates();
+      return matches.length;
+    }, { timeout: 12000, message: 'Identify one payment input for ' + label }).toBe(1);
+    return matches[0];
+  }
+  const fields = [
+    { label: /card number/i, selector: 'input[autocomplete="cc-number"], input[name="number"]',
+      value: card, expected: new RegExp('^\\s*' + card + '\\s*$') },
+    { label: /expir(y|ation)/i, selector: 'input[autocomplete="cc-exp"], input[name="expiry"]',
+      value: '1230', expected: /^12\s*\/?\s*(?:20)?30$/ },
+    { label: /security code|verification (code|value)|CVV/i,
+      selector: 'input[autocomplete="cc-csc"], input[name="verification_value"]',
+      value: '111', expected: /^111$/ },
+    { label: /name on card|cardholder|card holder/i,
+      selector: 'input[autocomplete="cc-name"], input[name="name"][id="name"]',
+      value: 'Test payment gateway', expected: /^Test payment gateway$/ },
+  ];
+  for (const field of fields) {
+    await test.step('Fill ' + field.label.source, async () => {
+      const target = await paymentInput(field.label, field.selector);
+      await target.fill('');
+      if (field.selector.includes('cc-exp')) {
+        await target.fill('12 / 30');
+      } else {
+        await target.pressSequentially(field.value);
+      }
+      await target.press('Tab');
+      await expect(target).toHaveValue(field.expected);
+    });
+  }
+
+  const row = (name: RegExp) => page.getByRole('row').filter({
+    has: page.getByRole('rowheader', { name }), visible: true,
+  });
+  async function amount(name: RegExp) {
+    const cell = row(name).getByRole('cell').last();
+    let cents: number | undefined;
+    await expect.poll(async () => {
+      // Read one rendered value per attempt, including while checkout recalculates.
+      const text = (await cell.allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim();
+      const match = text.match(/^(?:USD\s*)?\$\s*(\d[\d,]*)\.(\d{2})(?:\s*USD)?$/i);
+      if (match) {
+        cents = Number(match[1].replace(/,/g, '')) * 100 + Number(match[2]);
+      } else if (name.test('Shipping') && /^(?:free|free shipping)$/i.test(text)) {
+        cents = 0;
+      } else {
+        return text || '(no rendered amount)';
+      }
+      return 'parsed';
+    }, { timeout: 20000, message: 'Read checkout amount for ' + name }).toBe('parsed');
+    if (cents === undefined) throw new Error('Missing checkout amount for ' + name);
+    return cents;
+  }
+  for (const [variant, count] of [[first, 2], [second, 1]] as const) {
+    const line = page.getByRole('row').filter({ has: page.getByRole('cell', {
+      name: 'QA Notebook ' + variant.option1, exact: true }), visible: true });
+    await expect(line.getByRole('cell', { name: String(count), exact: true })).toHaveCount(1);
+  }
+  const shipping = await amount(/^Shipping$/i);
+  const subtotal = await amount(/^Subtotal/i);
+  const tax = await row(/tax/i).count() ? await amount(/tax/i) : 0;
+  const total = await amount(/^Total$/i);
+  expect(subtotal).toBe(first.price * 2 + second.price);
+  expect(total).toBe(subtotal + shipping + tax);
+  await expect(row(/^Total$/i)).toContainText('USD');
+
+  for (const field of fields) {
+    await expect(await paymentInput(field.label, field.selector)).toHaveValue(field.expected);
+  }
+  await page.getByRole('button', { name: /^(?:pay now|complete order)(?:\s+\$\s*[\d,]+\.\d{2})?$/i }).click({ timeout: 15000 });
+  return { subtotal, shipping, tax, total };
+}
+
 test('SH-07 ゲストのテスト決済を店舗の受注と照合する', async ({ page, playwright }, info) => {
   test.skip(process.env.SHOPIFY_TEST_ORDER !== '1', 'Opt in to creating one test order.');
   test.setTimeout(150_000);
@@ -555,113 +668,7 @@ test('SH-07 ゲストのテスト決済を店舗の受注と照合する', async
 
   try {
     await orders('SH07PREFLIGHT');
-    await change(page.request, 'add', { items: [{ id: first.id, quantity: 2 }, { id: second.id, quantity: 1 }] });
-    await page.goto(root + 'cart');
-    await page.getByRole('button', { name: /^check\s*out$/i }).click();
-    await expect(page).toHaveURL(/\/checkouts?\//);
-    const input = (name: string) => page.locator('input[name="' + name + '"]:visible').first();
-    await input('email').fill('sh07-' + Date.now() + '@example.com');
-    const country = page.locator('select[name="countryCode"]:visible').first();
-    await country.selectOption('US');
-    await input('firstName').fill('QA');
-    await input('lastName').fill('Buyer');
-    await input('address1').fill('1 Market Street');
-    await input('city').fill('San Francisco');
-    await page.locator('select[name="zone"]:visible').first().selectOption('CA');
-    await input('postalCode').fill('94105');
-    await input('postalCode').press('Tab');
-
-    await expect(page.getByText(/to simulate an approved transaction/i)).toBeVisible();
-    async function paymentInput(label: RegExp, selector: string) {
-      const inDocument = (scope: Frame) =>
-        scope.locator(selector).or(scope.getByRole('textbox', { name: label }))
-          .and(scope.locator('input:visible'));
-      async function candidates() {
-        const found: Locator[] = [];
-        for (const frame of page.frames()) {
-          if (frame !== page.mainFrame()) {
-            if (frame.isDetached()) continue;
-            const host = await frame.frameElement();
-            try {
-              if (!await host.isVisible() || !label.test(await host.getAttribute('title') || '')) continue;
-            } finally { await host.dispose(); }
-          }
-          found.push(...await inDocument(frame).all());
-        }
-        return found;
-      }
-      let matches: Locator[] = [];
-      await expect.poll(async () => {
-        matches = await candidates();
-        return matches.length;
-      }, { timeout: 12000, message: 'Identify one payment input for ' + label }).toBe(1);
-      return matches[0];
-    }
-    const fields = [
-      { label: /card number/i, selector: 'input[autocomplete="cc-number"], input[name="number"]',
-        value: '1', expected: /^\s*1\s*$/ },
-      { label: /expir(y|ation)/i, selector: 'input[autocomplete="cc-exp"], input[name="expiry"]',
-        value: '1230', expected: /^12\s*\/?\s*(?:20)?30$/ },
-      { label: /security code|verification (code|value)|CVV/i,
-        selector: 'input[autocomplete="cc-csc"], input[name="verification_value"]',
-        value: '111', expected: /^111$/ },
-      { label: /name on card|cardholder|card holder/i,
-        selector: 'input[autocomplete="cc-name"], input[name="name"][id="name"]',
-        value: 'Test payment gateway', expected: /^Test payment gateway$/ },
-    ];
-    for (const field of fields) {
-      await test.step('Fill ' + field.label.source, async () => {
-        const target = await paymentInput(field.label, field.selector);
-        await target.fill('');
-        if (field.selector.includes('cc-exp')) {
-          await target.fill('12 / 30');
-        } else {
-          await target.pressSequentially(field.value);
-        }
-        await target.press('Tab');
-        await expect(target).toHaveValue(field.expected);
-      });
-    }
-
-    const row = (name: RegExp) => page.getByRole('row').filter({
-      has: page.getByRole('rowheader', { name }), visible: true,
-    });
-    async function amount(name: RegExp) {
-      const cell = row(name).getByRole('cell').last();
-      let cents: number | undefined;
-      await expect.poll(async () => {
-        // Read one rendered value per attempt, including while checkout recalculates.
-        const text = (await cell.allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim();
-        const match = text.match(/^(?:USD\s*)?\$\s*(\d[\d,]*)\.(\d{2})(?:\s*USD)?$/i);
-        if (match) {
-          cents = Number(match[1].replace(/,/g, '')) * 100 + Number(match[2]);
-        } else if (name.test('Shipping') && /^(?:free|free shipping)$/i.test(text)) {
-          cents = 0;
-        } else {
-          return text || '(no rendered amount)';
-        }
-        return 'parsed';
-      }, { timeout: 20000, message: 'Read checkout amount for ' + name }).toBe('parsed');
-      if (cents === undefined) throw new Error('Missing checkout amount for ' + name);
-      return cents;
-    }
-    for (const [variant, count] of [[first, 2], [second, 1]] as const) {
-      const line = page.getByRole('row').filter({ has: page.getByRole('cell', {
-        name: 'QA Notebook ' + variant.option1, exact: true }), visible: true });
-      await expect(line.getByRole('cell', { name: String(count), exact: true })).toHaveCount(1);
-    }
-    const shipping = await amount(/^Shipping$/i);
-    const subtotal = await amount(/^Subtotal/i);
-    const tax = await row(/tax/i).count() ? await amount(/tax/i) : 0;
-    const total = await amount(/^Total$/i);
-    expect(subtotal).toBe(first.price * 2 + second.price);
-    expect(total).toBe(subtotal + shipping + tax);
-    await expect(row(/^Total$/i)).toContainText('USD');
-
-    for (const field of fields) {
-      await expect(await paymentInput(field.label, field.selector)).toHaveValue(field.expected);
-    }
-    await page.getByRole('button', { name: /^(?:pay now|complete order)(?:\s+\$\s*[\d,]+\.\d{2})?$/i }).click({ timeout: 15000 });
+    const { subtotal, shipping, tax, total } = await submitGuestTestPayment(page, 'sh07');
     const confirmation = page.getByText(/Confirmation\s*#\s*[A-Z\d]+/i).filter({ visible: true }).first();
     await expect(confirmation).toBeVisible({ timeout: 25000 });
     const code = (await confirmation.innerText()).match(/Confirmation\s*#\s*([A-Z\d]+)/i)![1];
@@ -687,4 +694,34 @@ test('SH-07 ゲストのテスト決済を店舗の受注と照合する', async
       body: JSON.stringify({ order: order.name, red: 2, blue: 1, currency: 'USD',
         subtotalCents: subtotal, shippingCents: shipping, taxCents: tax, totalCents: total, testOrder: true }, null, 2) });
   } finally { await admin.dispose(); }
+});
+
+test('SH-08 決済を拒否された後も商品と小計が保持され、支払いボタンが再び操作できる', async ({ page }, info) => {
+  test.skip(process.env.SHOPIFY_TEST_DECLINE !== '1', 'Opt in to one declined test payment.');
+  test.setTimeout(150_000);
+  expect(new URL(root).hostname).toBe('nha6ki-qa-lab.myshopify.com');
+  const before = await submitGuestTestPayment(page, 'sh08');
+  const rejection = page.getByText(
+    'There was an issue processing your payment. Try again or use a different payment method.',
+    { exact: true },
+  ).filter({ visible: true });
+  await expect(rejection).toBeVisible({ timeout: 30000 });
+  await expect(page).toHaveURL(/\/checkouts?\//);
+  const retry = page.getByRole('button', { name: /^(pay now|complete order)\b/i });
+  await expect(retry).toBeEnabled();
+
+  for (const [variant, count] of [[first, 2], [second, 1]] as const) {
+    const line = page.getByRole('row').filter({ has: page.getByRole('cell', {
+      name: 'QA Notebook ' + variant.option1, exact: true }), visible: true });
+    await expect(line.getByRole('cell', { name: String(count), exact: true })).toHaveCount(1);
+  }
+  const subtotal = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Subtotal/i }), visible: true });
+  const displayed = '$' + (before.subtotal / 100).toFixed(2);
+  await expect(subtotal.getByRole('cell', { name: displayed, exact: true })).toBeVisible();
+  await info.attach('payment-declined.png', { body: await rejection.screenshot(), contentType: 'image/png' });
+  await info.attach('retained-subtotal.png', { body: await subtotal.screenshot(), contentType: 'image/png' });
+  await info.attach('declined-checkout.json', { contentType: 'application/json', body: JSON.stringify({
+    red: 2, blue: 1, subtotalBeforeCents: before.subtotal, subtotalAfter: displayed,
+    declineMessage: await rejection.innerText(), retryButtonEnabled: await retry.isEnabled(),
+  }, null, 2) });
 });
