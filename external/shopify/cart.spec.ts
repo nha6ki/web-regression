@@ -537,8 +537,16 @@ async function ensureGuestStreet(page: Page) {
   await expect(street, 'Shipping street must persist after leaving the field').toHaveValue(expected);
 }
 
-async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09' | 'sh12' | 'sh14' | 'sh15') {
-  await change(page.request, 'add', { items: [{ id: first.id, quantity: 2 }, { id: second.id, quantity: 1 }] });
+const engravingOrder = [{ label: 'ALPHA', quantity: 2 }, { label: 'BRAVO', quantity: 1 }] as const;
+
+async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09' | 'sh12' | 'sh14' | 'sh15', personalized = false) {
+  if (personalized) {
+    for (const { label, quantity } of engravingOrder) {
+      await change(page.request, 'add', { items: [{ id: second.id, quantity, properties: { Engraving: label } }] });
+    }
+  } else {
+    await change(page.request, 'add', { items: [{ id: first.id, quantity: 2 }, { id: second.id, quantity: 1 }] });
+  }
   await page.goto(root + 'cart');
   await page.getByRole('button', { name: /^check\s*out$/i }).click();
   await expect(page).toHaveURL(/\/checkouts?\//);
@@ -561,7 +569,7 @@ async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
   return payAtCheckout(page, scenario === 'sh07' ? '1' : '2');
 }
 
-async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false, addressTest?: TestInfo) {
+async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false, addressTest?: TestInfo, engravingTest?: TestInfo) {
   const gatewayHint = card === '1' ? /to simulate an approved transaction/i : /to simulate a declined transaction/i;
   await expect(page.getByText(gatewayHint)).toBeVisible();
   async function paymentInput(label: RegExp, selector: string) {
@@ -640,10 +648,26 @@ async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false, a
     if (cents === undefined) throw new Error('Missing checkout amount for ' + name);
     return cents;
   }
-  for (const [variant, count] of [[first, 2], [second, 1]] as const) {
-    const line = page.getByRole('row').filter({ has: page.getByRole('cell', {
-      name: 'QA Notebook ' + variant.option1, exact: true }), visible: true });
-    await expect(line.getByRole('cell', { name: String(count), exact: true })).toHaveCount(1);
+  if (engravingTest) {
+    const lines = page.getByRole('row').filter({ hasText: 'QA Notebook', visible: true });
+    await expect(lines).toHaveCount(2);
+    for (const { label, quantity } of engravingOrder) {
+      const line = lines.filter({ hasText: label });
+      await expect(line).toHaveCount(1);
+      await expect(line).toContainText(/Blue/i);
+      await expect(line.getByRole('cell', { name: String(quantity), exact: true })).toHaveCount(1);
+      const amount = '$' + (second.price * quantity / 100).toFixed(2);
+      await expect(line.getByRole('cell', { name: amount, exact: true })).toBeVisible();
+      await engravingTest.attach(label.toLowerCase() + '-checkout.png', {
+        contentType: 'image/png', body: await line.screenshot(),
+      });
+    }
+  } else {
+    for (const [variant, count] of [[first, 2], [second, 1]] as const) {
+      const line = page.getByRole('row').filter({ has: page.getByRole('cell', {
+        name: 'QA Notebook ' + variant.option1, exact: true }), visible: true });
+      await expect(line.getByRole('cell', { name: String(count), exact: true })).toHaveCount(1);
+    }
   }
   const streetInput = addressTest
     ? page.getByRole('combobox', { name: /^address$/i }).and(page.locator('input[name="address1"]:not([tabindex="-1"]):visible'))
@@ -681,7 +705,7 @@ async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false, a
   const subtotal = await amount(/^Subtotal/i);
   const tax = await row(/tax/i).count() ? await amount(/tax/i) : 0;
   const total = await amount(/^Total$/i);
-  expect(subtotal).toBe(first.price * 2 + second.price);
+  expect(subtotal).toBe(engravingTest ? second.price * 3 : first.price * 2 + second.price);
   expect(total).toBe(subtotal + shipping + tax);
   await expect(row(/^Total$/i)).toContainText('USD');
   if (addressTest) {
@@ -700,7 +724,7 @@ async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false, a
 
 type OrderFixtures = Pick<import('@playwright/test').PlaywrightTestArgs & import('@playwright/test').PlaywrightWorkerArgs, 'page' | 'playwright'>;
 
-async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, scenario: 'sh07' | 'sh12' | 'sh14' | 'sh15' | 'sh16' | 'sh17') {
+async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, scenario: 'sh07' | 'sh12' | 'sh14' | 'sh15' | 'sh16' | 'sh17' | 'sh20') {
   const retryDecline = scenario === 'sh12' || scenario === 'sh16';
   test.skip(process.env.SHOPIFY_TEST_ORDER !== '1', 'Opt in to creating one test order.');
   test.setTimeout(150_000);
@@ -716,7 +740,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
         orders(first: 2, query: $q) { nodes {
           name confirmationNumber test displayFinancialStatus
           ${scenario === 'sh14' || scenario === 'sh16' ? 'shippingLines(first: 2) { nodes { title } }' : ''}
-          lineItems(first: 5) { nodes { title variantTitle quantity } }
+          lineItems(first: 5) { nodes { title variantTitle quantity ${scenario === 'sh20' ? 'customAttributes { key value }' : ''} } }
           subtotalPriceSet { presentmentMoney { amount currencyCode } }
           totalShippingPriceSet { presentmentMoney { amount currencyCode } }
           totalTaxSet { presentmentMoney { amount currencyCode } }
@@ -731,7 +755,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       return body.data.orders.nodes as Array<{
         shippingLines?: { nodes: Array<{ title: string }> };
         name: string; confirmationNumber: string; test: boolean; displayFinancialStatus: string;
-        lineItems: { nodes: Array<{ title: string; variantTitle: string; quantity: number }> };
+        lineItems: { nodes: Array<{ title: string; variantTitle: string; quantity: number; customAttributes?: Array<{ key: string; value: string }> }> };
       } & Record<'subtotalPriceSet' | 'totalShippingPriceSet' | 'totalTaxSet' | 'totalPriceSet',
         { presentmentMoney: { amount: string; currencyCode: string } }>>;
     } finally { await response.dispose(); }
@@ -739,7 +763,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
 
   try {
     await orders('SH07PREFLIGHT');
-    await openGuestCheckout(page, scenario === 'sh16' || scenario === 'sh17' ? 'sh12' : scenario);
+    await openGuestCheckout(page, scenario === 'sh16' || scenario === 'sh17' || scenario === 'sh20' ? 'sh12' : scenario, scenario === 'sh20');
     if (scenario === 'sh14') {
       const totalRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Total$/i }), visible: true });
       const summary = page.getByRole('table').filter({ has: totalRow, visible: true });
@@ -784,7 +808,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       await expect(totalRow.getByRole('cell').last()).toContainText('$45.00', { useInnerText: true, timeout: 20000 });
       await info.attach('03-express.png', { contentType: 'image/png', body: await summary.screenshot() });
     }
-    const approved = await payAtCheckout(page, '1', scenario !== 'sh07', scenario === 'sh17' ? info : undefined);
+    const approved = await payAtCheckout(page, '1', scenario !== 'sh07', scenario === 'sh17' ? info : undefined, scenario === 'sh20' ? info : undefined);
     if (scenario === 'sh16') expect(approved).toEqual({ subtotal: 3000, shipping: 1500, tax: 0, total: 4500 });
     else if (rejectedAmounts) expect(approved).toEqual(rejectedAmounts);
     const { subtotal, shipping, tax, total } = approved;
@@ -800,8 +824,18 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
     expect(order.test).toBe(true);
     expect(order.displayFinancialStatus).toBe('PAID');
     expect(order.lineItems.nodes).toHaveLength(2);
-    for (const [variant, count] of [[first, 2], [second, 1]] as const) {
-      expect(order.lineItems.nodes).toContainEqual({ title: 'QA Notebook', variantTitle: variant.option1, quantity: count });
+    if (scenario === 'sh20') {
+      for (const { label, quantity } of engravingOrder) {
+        const matching = order.lineItems.nodes.filter(line =>
+          line.customAttributes?.some(attribute => attribute.key === 'Engraving' && attribute.value === label));
+        expect(matching).toHaveLength(1);
+        expect(matching[0]).toMatchObject({ title: 'QA Notebook', variantTitle: 'Blue', quantity });
+        expect(matching[0].customAttributes?.filter(attribute => attribute.key === 'Engraving')).toEqual([{ key: 'Engraving', value: label }]);
+      }
+    } else {
+      for (const [variant, count] of [[first, 2], [second, 1]] as const) {
+        expect(order.lineItems.nodes).toContainEqual({ title: 'QA Notebook', variantTitle: variant.option1, quantity: count });
+      }
     }
     for (const [field, cents] of [['subtotalPriceSet', subtotal], ['totalShippingPriceSet', shipping],
       ['totalTaxSet', tax], ['totalPriceSet', total]] as const) {
@@ -809,7 +843,16 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       expect(money.currencyCode).toBe('USD');
       expect(Math.round(Number(money.amount) * 100), field).toBe(cents);
     }
-    if (scenario === 'sh17') {
+    if (scenario === 'sh20') {
+      await info.attach('engraved-order.json', { contentType: 'application/json', body: JSON.stringify({
+        checkout: { currency: 'USD', amountsInCents: approved },
+        order: { test: order.test, status: order.displayFinancialStatus, subtotal: order.subtotalPriceSet.presentmentMoney,
+          total: order.totalPriceSet.presentmentMoney, items: order.lineItems.nodes.map(line => ({
+            product: line.title, color: line.variantTitle, quantity: line.quantity,
+            engraving: line.customAttributes?.find(attribute => attribute.key === 'Engraving')?.value,
+          })) },
+      }, null, 2) });
+    } else if (scenario === 'sh17') {
       await info.attach('address-recovery.json', { contentType: 'application/json', body: JSON.stringify({
         addressRequiredMessageShown: true, sameCheckoutAfterError: true, currency: 'USD', correctedCheckoutCents: approved,
         order: { test: order.test, status: order.displayFinancialStatus, lines: order.lineItems.nodes,
@@ -1295,4 +1338,9 @@ test('SH-19 同じ青ノートの名入れ別に冊数を変更し、チェッ�
   await info.attach('engraving-comparison.json', { contentType: 'application/json', body: JSON.stringify({
     currency: 'USD', before, afterReload, checkoutItems, checkoutSubtotal: (await amount.innerText()).trim(),
   }, null, 2) });
+});
+
+test('SH-20 同じ青ノートの名入れと冊数を支払済み注文の明細で照合する', async ({ page, playwright }, info) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await verifyGuestOrder({ page, playwright }, info, 'sh20');
 });
