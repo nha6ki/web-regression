@@ -519,7 +519,7 @@ test('SH-06 別タブで赤を買い足し、元のタブを再読み込みし�
   }
 });
 
-async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
+async function openGuestCheckout(page: Page, scenario: 'sh07' | 'sh08' | 'sh09') {
   await change(page.request, 'add', { items: [{ id: first.id, quantity: 2 }, { id: second.id, quantity: 1 }] });
   await page.goto(root + 'cart');
   await page.getByRole('button', { name: /^check\s*out$/i }).click();
@@ -535,7 +535,10 @@ async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
   await page.locator('select[name="zone"]:visible').first().selectOption('CA');
   await input('postalCode').fill('94105');
   await input('postalCode').press('Tab');
+}
 
+async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
+  await openGuestCheckout(page, scenario);
   const gatewayHint = scenario === 'sh07' ? /to simulate an approved transaction/i : /to simulate a declined transaction/i;
   await expect(page.getByText(gatewayHint)).toBeVisible();
   const card = scenario === 'sh07' ? '1' : '2';
@@ -724,4 +727,54 @@ test('SH-08 決済を拒否された後も商品と小計が保持され、支�
     red: 2, blue: 1, subtotalBeforeCents: before.subtotal, subtotalAfter: displayed,
     declineMessage: await rejection.innerText(), retryButtonEnabled: await retry.isEnabled(),
   }, null, 2) });
+});
+
+test('SH-09 配送方法を標準から速達に変更し、標準に戻すと送料と合計が元に戻る', async ({ page }, info) => {
+  test.setTimeout(120_000);
+  expect(new URL(root).hostname).toBe('nha6ki-qa-lab.myshopify.com');
+  await openGuestCheckout(page, 'sh09');
+  const subtotal = first.price * 2 + second.price;
+  const money = (cents: number) => '$' + (cents / 100).toFixed(2);
+  const summaryRow = (name: RegExp) => page.getByRole('row').filter({
+    has: page.getByRole('rowheader', { name }), visible: true,
+  });
+  const subtotalRow = summaryRow(/^Subtotal\b/i);
+  const shippingRow = summaryRow(/^Shipping$/i);
+  const totalRow = summaryRow(/^Total$/i);
+  const standard = page.getByRole('radio', { name: /\bStandard\b/i });
+  const express = page.getByRole('radio', { name: /\bExpress\b/i });
+
+  async function verifyRate(option: Locator, shipping: number, image: string) {
+    await expect(option).toBeChecked();
+    for (const [variant, quantity] of [[first, 2], [second, 1]] as const) {
+      const line = page.getByRole('row').filter({ has: page.getByRole('cell', {
+        name: 'QA Notebook ' + variant.option1, exact: true }), visible: true });
+      await expect(line.getByRole('cell', { name: String(quantity), exact: true })).toHaveCount(1);
+    }
+    const subtotalCell = subtotalRow.getByRole('cell').last();
+    const shippingCell = shippingRow.getByRole('cell').last();
+    const totalCell = totalRow.getByRole('cell').last();
+    await expect(subtotalCell).toHaveText(money(subtotal), { useInnerText: true });
+    await expect(shippingCell).toHaveText(money(shipping), { useInnerText: true, timeout: 20000 });
+    const expectedTotal = money(subtotal + shipping).slice(1).replace('.', '\\.');
+    await expect(totalCell).toHaveText(new RegExp('^(?:USD\\s*)?\\$' + expectedTotal + '(?:\\s*USD)?$'), { useInnerText: true, timeout: 20000 });
+    await expect(totalRow).toContainText('USD');
+    const totalsTable = page.getByRole('table').filter({ has: totalRow, visible: true });
+    await info.attach(image, { body: await totalsTable.screenshot(), contentType: 'image/png' });
+    return {
+      red: 2, blue: 1, subtotal: await subtotalCell.innerText(),
+      shipping: await shippingCell.innerText(), total: await totalCell.innerText(),
+    };
+  }
+
+  await standard.check({ timeout: 20000 });
+  const initial = await verifyRate(standard, 800, '01-standard.png');
+  await express.check();
+  const expedited = await verifyRate(express, 1500, '02-express.png');
+  await standard.check();
+  const restored = await verifyRate(standard, 800, '03-standard-restored.png');
+  expect(restored).toEqual(initial);
+  await info.attach('shipping-comparison.json', {
+    contentType: 'application/json', body: JSON.stringify({ initial, expedited, restored }, null, 2),
+  });
 });
