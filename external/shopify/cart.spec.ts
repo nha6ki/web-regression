@@ -561,7 +561,7 @@ async function submitGuestTestPayment(page: Page, scenario: 'sh07' | 'sh08') {
   return payAtCheckout(page, scenario === 'sh07' ? '1' : '2');
 }
 
-async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false) {
+async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false, addressTest?: TestInfo) {
   const gatewayHint = card === '1' ? /to simulate an approved transaction/i : /to simulate a declined transaction/i;
   await expect(page.getByText(gatewayHint)).toBeVisible();
   async function paymentInput(label: RegExp, selector: string) {
@@ -601,19 +601,22 @@ async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false) {
       selector: 'input[autocomplete="cc-name"], input[name="name"][id="name"]',
       value: 'Test payment gateway', expected: /^Test payment gateway$/ },
   ];
-  for (const field of fields) {
-    await test.step('Fill ' + field.label.source, async () => {
-      const target = await paymentInput(field.label, field.selector);
-      await target.fill('');
-      if (field.selector.includes('cc-exp')) {
-        await target.fill('12 / 30');
-      } else {
-        await target.pressSequentially(field.value);
-      }
-      await target.press('Tab');
-      await expect(target).toHaveValue(field.expected);
-    });
+  async function fillTestCard() {
+    for (const field of fields) {
+      await test.step('Fill ' + field.label.source, async () => {
+        const target = await paymentInput(field.label, field.selector);
+        await target.fill('');
+        if (field.selector.includes('cc-exp')) {
+          await target.fill('12 / 30');
+        } else {
+          await target.pressSequentially(field.value);
+        }
+        await target.press('Tab');
+        await expect(target).toHaveValue(field.expected);
+      });
+    }
   }
+  await fillTestCard();
 
   const row = (name: RegExp) => page.getByRole('row').filter({
     has: page.getByRole('rowheader', { name }), visible: true,
@@ -642,7 +645,38 @@ async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false) {
       name: 'QA Notebook ' + variant.option1, exact: true }), visible: true });
     await expect(line.getByRole('cell', { name: String(count), exact: true })).toHaveCount(1);
   }
-  if (checkStreet) await ensureGuestStreet(page);
+  const streetInput = addressTest
+    ? page.getByRole('combobox', { name: /^address$/i }).and(page.locator('input[name="address1"]:not([tabindex="-1"]):visible'))
+    : shippingStreet(page);
+  if (addressTest) {
+    const checkout = new URL(page.url());
+    const street = streetInput;
+    await street.fill('');
+    await expect(street).toHaveValue('');
+    await page.getByRole('button', { name: /^(?:pay now|complete order)(?:\s+\$\s*[\d,]+\.\d{2})?$/i }).click({ timeout: 15000 });
+    const error = page.getByText(/^enter (?:an|a (?:shipping|street)) address[.!]?$/i).filter({ visible: true });
+    await expect(error).toHaveCount(1);
+    await expect(error).toBeVisible();
+    await expect(street).toHaveValue('');
+    const current = new URL(page.url());
+    expect(current.origin).toBe(checkout.origin);
+    expect(current.pathname.replace(/\/$/, '')).toBe(checkout.pathname.replace(/\/$/, ''));
+    await addressTest.attach('01-required-address.png', { contentType: 'image/png', body: await error.screenshot() });
+    const expectedStreet = '1 Market Street';
+    await expect(async () => {
+      await expect(street).toBeEditable({ timeout: 2000 });
+      await street.fill(expectedStreet, { timeout: 2000 });
+      await page.getByRole('textbox', { name: 'City', exact: true }).and(page.locator('input[name="city"][autocomplete~="shipping"]:not([aria-hidden="true"]):not([data-autofill-honeypot="true"])')).click({ timeout: 2000 });
+      await expect(street).toHaveValue(expectedStreet, { timeout: 2000 });
+      await expect(error).toHaveCount(0, { timeout: 2000 });
+    }).toPass({ timeout: 15000, intervals: [300, 750, 1500] });
+    const standard = page.getByRole('radio', { name: /\bStandard\b/i });
+    await standard.check({ timeout: 20000 });
+    await expect(standard).toBeChecked();
+    await expect(error).toHaveCount(0);
+    await fillTestCard();
+  }
+  if (checkStreet && !addressTest) await ensureGuestStreet(page);
   const shipping = await amount(/^Shipping$/i);
   const subtotal = await amount(/^Subtotal/i);
   const tax = await row(/tax/i).count() ? await amount(/tax/i) : 0;
@@ -650,18 +684,23 @@ async function payAtCheckout(page: Page, card: '1' | '2', checkStreet = false) {
   expect(subtotal).toBe(first.price * 2 + second.price);
   expect(total).toBe(subtotal + shipping + tax);
   await expect(row(/^Total$/i)).toContainText('USD');
+  if (addressTest) {
+    expect({ subtotal, shipping, tax, total }).toEqual({ subtotal: 3000, shipping: 800, tax: 0, total: 3800 });
+    const summary = page.getByRole('table').filter({ has: row(/^Total$/i), visible: true });
+    await addressTest.attach('02-corrected-summary.png', { contentType: 'image/png', body: await summary.screenshot() });
+  }
 
   for (const field of fields) {
     await expect(await paymentInput(field.label, field.selector)).toHaveValue(field.expected);
   }
-  if (checkStreet) await expect(shippingStreet(page), 'Shipping street immediately before payment').toHaveValue('1 Market Street');
+  if (checkStreet) await expect(streetInput, 'Shipping street immediately before payment').toHaveValue('1 Market Street');
   await page.getByRole('button', { name: /^(?:pay now|complete order)(?:\s+\$\s*[\d,]+\.\d{2})?$/i }).click({ timeout: 15000 });
   return { subtotal, shipping, tax, total };
 }
 
 type OrderFixtures = Pick<import('@playwright/test').PlaywrightTestArgs & import('@playwright/test').PlaywrightWorkerArgs, 'page' | 'playwright'>;
 
-async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, scenario: 'sh07' | 'sh12' | 'sh14' | 'sh15' | 'sh16') {
+async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestInfo, scenario: 'sh07' | 'sh12' | 'sh14' | 'sh15' | 'sh16' | 'sh17') {
   const retryDecline = scenario === 'sh12' || scenario === 'sh16';
   test.skip(process.env.SHOPIFY_TEST_ORDER !== '1', 'Opt in to creating one test order.');
   test.setTimeout(150_000);
@@ -700,7 +739,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
 
   try {
     await orders('SH07PREFLIGHT');
-    await openGuestCheckout(page, scenario === 'sh16' ? 'sh12' : scenario);
+    await openGuestCheckout(page, scenario === 'sh16' || scenario === 'sh17' ? 'sh12' : scenario);
     if (scenario === 'sh14') {
       const totalRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Total$/i }), visible: true });
       const summary = page.getByRole('table').filter({ has: totalRow, visible: true });
@@ -745,7 +784,7 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       await expect(totalRow.getByRole('cell').last()).toContainText('$45.00', { useInnerText: true, timeout: 20000 });
       await info.attach('03-express.png', { contentType: 'image/png', body: await summary.screenshot() });
     }
-    const approved = await payAtCheckout(page, '1', scenario !== 'sh07');
+    const approved = await payAtCheckout(page, '1', scenario !== 'sh07', scenario === 'sh17' ? info : undefined);
     if (scenario === 'sh16') expect(approved).toEqual({ subtotal: 3000, shipping: 1500, tax: 0, total: 4500 });
     else if (rejectedAmounts) expect(approved).toEqual(rejectedAmounts);
     const { subtotal, shipping, tax, total } = approved;
@@ -770,7 +809,14 @@ async function verifyGuestOrder({ page, playwright }: OrderFixtures, info: TestI
       expect(money.currencyCode).toBe('USD');
       expect(Math.round(Number(money.amount) * 100), field).toBe(cents);
     }
-    if (scenario === 'sh16') {
+    if (scenario === 'sh17') {
+      await info.attach('address-recovery.json', { contentType: 'application/json', body: JSON.stringify({
+        addressRequiredMessageShown: true, sameCheckoutAfterError: true, currency: 'USD', correctedCheckoutCents: approved,
+        order: { test: order.test, status: order.displayFinancialStatus, lines: order.lineItems.nodes,
+          subtotal: order.subtotalPriceSet.presentmentMoney, shipping: order.totalShippingPriceSet.presentmentMoney,
+          tax: order.totalTaxSet.presentmentMoney, total: order.totalPriceSet.presentmentMoney },
+      }, null, 2) });
+    } else if (scenario === 'sh16') {
       expect(order.shippingLines?.nodes).toEqual([{ title: 'Express' }]);
       await info.attach('shipping-recovery.json', { contentType: 'application/json', body: JSON.stringify({
         currency: 'USD', amountsInCents: { declinedStandard: rejectedAmounts, approvedExpress: approved },
@@ -1111,4 +1157,8 @@ test('SH-15 購入完了後のカートで買い物を再開し、直前の支�
 
 test('SH-16 決済拒否後に速達へ変更し、再決済した注文の送料を照合', async ({ page, playwright }, info) => {
   await verifyGuestOrder({ page, playwright }, info, 'sh16');
+});
+
+test('SH-17 配送先住所の未入力エラーを訂正し、同じチェックアウトで注文する', async ({ page, playwright }, info) => {
+  await verifyGuestOrder({ page, playwright }, info, 'sh17');
 });
