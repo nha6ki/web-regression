@@ -1162,3 +1162,57 @@ test('SH-16 決済拒否後に速達へ変更し、再決済した注文の送�
 test('SH-17 配送先住所の未入力エラーを訂正し、同じチェックアウトで注文する', async ({ page, playwright }, info) => {
   await verifyGuestOrder({ page, playwright }, info, 'sh17');
 });
+
+test('SH-18 セット購入リンクの色・冊数と小計をカートとチェックアウトで照合する', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const offer = [{ variant: first, quantity: 1 }, { variant: second, quantity: 2 }];
+  const money = (cents: number) => '$' + (cents / 100).toFixed(2);
+  const subtotal = offer.reduce((sum, { variant, quantity }) => sum + variant.price * quantity, 0);
+  expect(subtotal, "Published fixture subtotal in USD cents").toBe(3000);
+  const permalink = new URL('cart/' + offer.map(({ variant, quantity }) => variant.id + ':' + quantity).join(','), root);
+  permalink.searchParams.set('storefront', 'true');
+  await page.goto(permalink.href);
+  await expect(page).toHaveURL(url => url.origin === permalink.origin && /\/cart\/?$/.test(url.pathname));
+  const main = page.getByRole('main');
+  const rows = main.locator('#cart-form tr').filter({ has: page.locator('input[type="number"]:visible') });
+  await expect(rows).toHaveCount(2);
+  const saved = await cart(page.request);
+  expect(saved.items).toHaveLength(2);
+  expect(saved.item_count).toBe(3);
+  expect(saved.total_price).toBe(subtotal);
+  for (const { variant, quantity } of offer) {
+    const line = rows.filter({ hasText: new RegExp('\\b' + variant.option1 + '\\b') });
+    await expect(line.locator('input[type="number"]:visible')).toHaveValue(String(quantity));
+    await expect(line).toContainText(money(variant.price * quantity));
+    expect(saved.items).toContainEqual(expect.objectContaining({
+      variant_id: variant.id, quantity, final_line_price: variant.price * quantity,
+    }));
+  }
+  await expect(main.getByTestId('cart-total-value')).toContainText(money(subtotal));
+  await info.attach('01-linked-cart.png', { body: await main.screenshot(), contentType: 'image/png' });
+  await main.getByRole('button', { name: /^check\s*out$/i }).click();
+  await expect(page).toHaveURL(/\/checkouts?\//);
+  const lines = page.getByRole('row').filter({ has: page.getByRole('cell', { name: /^QA Notebook (Red|Blue)$/ }), visible: true });
+  await expect(lines).toHaveCount(2);
+  const checkout = [];
+  for (const { variant, quantity } of offer) {
+    const item = 'QA Notebook ' + variant.option1;
+    const line = lines.filter({ has: page.getByRole('cell', { name: item, exact: true }) });
+    const qty = line.getByRole('cell', { name: String(quantity), exact: true });
+    const amount = line.getByRole('cell', { name: money(variant.price * quantity), exact: true });
+    await expect(qty).toHaveCount(1);
+    await expect(amount).toBeVisible();
+    checkout.push({ item, quantity: (await qty.textContent())?.trim(), amount: (await amount.innerText()).trim() });
+  }
+  const subtotalRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^Subtotal\b/i }), visible: true });
+  const amount = subtotalRow.getByRole('cell', { name: money(subtotal), exact: true });
+  await expect(amount).toBeVisible();
+  const products = page.getByRole('table').filter({ has: page.getByRole('cell', { name: 'QA Notebook Blue', exact: true }), visible: true });
+  await info.attach('02-checkout-items.png', { body: await products.screenshot(), contentType: 'image/png' });
+  await info.attach('03-checkout-subtotal.png', { body: await subtotalRow.screenshot(), contentType: 'image/png' });
+  await info.attach('permalink-comparison.json', { contentType: 'application/json', body: JSON.stringify({
+    linkItems: offer.map(({ variant, quantity }) => ({ variantId: variant.id, color: variant.option1, quantity })),
+    cart: { items: saved.items.map(i => ({ variantId: i.variant_id, quantity: i.quantity, lineCents: i.final_line_price })), subtotalCents: saved.total_price },
+    checkout: { items: checkout, subtotal: (await amount.innerText()).trim() },
+  }, null, 2) });
+});
